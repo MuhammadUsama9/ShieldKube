@@ -303,23 +303,81 @@ class K8sScanner:
 
     def _analyze_pod_security(self, pod):
         risks = []
+        
+        # Check Pod Spec
+        if pod.spec.host_network:
+            risks.append({"type": "HostNetwork", "msg": "Host network usage.", "cis": "5.2.4", "category": "Host", "patch": "hostNetwork: false", "mitre": {"tactic": "Privilege Escalation", "id": "T1611"}})
+        if pod.spec.host_pid:
+            risks.append({"type": "HostPID", "msg": "Host PID usage.", "cis": "5.2.3", "category": "Host", "patch": "hostPID: false", "mitre": {"tactic": "Privilege Escalation", "id": "T1611"}})
+        if pod.spec.host_ipc:
+            risks.append({"type": "HostIPC", "msg": "Host IPC usage.", "cis": "5.2.5", "category": "Host", "patch": "hostIPC: false", "mitre": {"tactic": "Privilege Escalation", "id": "T1611"}})
+
         for c in pod.spec.containers:
+            # Privileged
             if c.security_context and c.security_context.privileged:
                 risks.append({
                     "type": "Privileged", 
-                    "msg": "Privileged container.", 
+                    "msg": f"Privileged container: {c.name}", 
                     "cis": "5.2.2", 
                     "category": "Runtime", 
                     "patch": "privileged: false",
                     "mitre": {"tactic": "Execution", "id": "T1611"}
                 })
+            
+            # Root User
+            if not c.security_context or not c.security_context.run_as_non_root:
+                risks.append({
+                    "type": "RunAsRoot", 
+                    "msg": f"Container '{c.name}' may run as root.", 
+                    "cis": "5.2.6", 
+                    "category": "Runtime", 
+                    "patch": "runAsNonRoot: true",
+                    "mitre": {"tactic": "Privilege Escalation", "id": "T1548"}
+                })
+
+            # ReadOnlyRootFilesystem
+            if not c.security_context or not c.security_context.read_only_root_filesystem:
+                risks.append({
+                    "type": "WritableRootFS", 
+                    "msg": f"Writable root filesystem in '{c.name}'.", 
+                    "cis": "5.2.8", 
+                    "category": "Runtime", 
+                    "patch": "readOnlyRootFilesystem: true",
+                    "mitre": {"tactic": "Persistence", "id": "T1499"}
+                })
+
+            # Capabilities
+            if c.security_context and c.security_context.capabilities:
+                add = c.security_context.capabilities.add or []
+                if "SYS_ADMIN" in add or "ALL" in add:
+                    risks.append({
+                        "type": "DangerousCapabilities", 
+                        "msg": f"Dangerous capabilities in '{c.name}'.", 
+                        "cis": "5.2.1", 
+                        "category": "Runtime", 
+                        "patch": "capabilities: {drop: ['ALL']}",
+                        "mitre": {"tactic": "Privilege Escalation", "id": "T1611"}
+                    })
+
+            # Resource Limits
+            if not c.resources or not c.resources.limits:
+                risks.append({
+                    "type": "ResourceLimits", 
+                    "msg": f"No resource limits for '{c.name}'.", 
+                    "cis": "5.6.1", 
+                    "category": "Runtime", 
+                    "patch": "resources: {limits: {cpu: '500m', memory: '512Mi'}}",
+                    "mitre": {"tactic": "Impact", "id": "T1496"}
+                })
+
+            # Images
             if ":" not in c.image or c.image.endswith(":latest"):
                 risks.append({
                     "type": "LatestTag", 
-                    "msg": "Avoid :latest.", 
+                    "msg": f"Container '{c.name}' uses :latest tag.", 
                     "cis": "5.4.1", 
                     "category": "Images", 
-                    "patch": "image: nginx:1.25",
+                    "patch": f"image: {c.image.split(':')[0]}:v1.0.0",
                     "mitre": {"tactic": "Initial Access", "id": "T1204"}
                 })
         return risks
@@ -331,9 +389,17 @@ class K8sScanner:
 
     def _get_mock_pods(self):
         return [
-            {"name": "nginx-api", "namespace": "prod", "severity": "Critical", "risks": [{"type": "Privileged", "msg": "Privileged container.", "cis": "5.2.2", "category": "Runtime", "patch": "privileged: false", "mitre": {"tactic": "Execution", "id": "T1611"}}]},
-            {"name": "redis-cache", "namespace": "testing", "severity": "Low", "risks": []},
-            {"name": "webapp-01", "namespace": "default", "severity": "High", "risks": [{"type": "LatestTag", "msg": "Avoid :latest.", "cis": "5.4.1", "category": "Images", "patch": "image: nginx:1.25", "mitre": {"tactic": "Initial Access", "id": "T1204"}}]}
+            {"name": "nginx-api", "namespace": "prod", "severity": "Critical", "risks": [
+                {"type": "Privileged", "msg": "Privileged container: nginx", "cis": "5.2.2", "category": "Runtime", "patch": "privileged: false", "mitre": {"tactic": "Execution", "id": "T1611"}},
+                {"type": "RunAsRoot", "msg": "Container 'nginx' may run as root.", "cis": "5.2.6", "category": "Runtime", "patch": "runAsNonRoot: true", "mitre": {"tactic": "Privilege Escalation", "id": "T1548"}}
+            ]},
+            {"name": "redis-cache", "namespace": "testing", "severity": "High", "risks": [
+                {"type": "ResourceLimits", "msg": "No resource limits for 'redis'.", "cis": "5.6.1", "category": "Runtime", "patch": "resources: {limits: {cpu: '500m', memory: '512Mi'}}", "mitre": {"tactic": "Impact", "id": "T1496"}}
+            ]},
+            {"name": "webapp-01", "namespace": "default", "severity": "High", "risks": [
+                {"type": "LatestTag", "msg": "Container 'webapp' uses :latest tag.", "cis": "5.4.1", "category": "Images", "patch": "image: nginx:1.25", "mitre": {"tactic": "Initial Access", "id": "T1204"}},
+                {"type": "WritableRootFS", "msg": "Writable root filesystem in 'webapp'.", "cis": "5.2.8", "category": "Runtime", "patch": "readOnlyRootFilesystem: true", "mitre": {"tactic": "Persistence", "id": "T1499"}}
+            ]}
         ]
 
     def _get_mock_inventory(self):
