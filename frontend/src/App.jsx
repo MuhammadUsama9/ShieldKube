@@ -45,7 +45,7 @@ function App() {
 
     const fetchData = async () => {
         try {
-            const [sumRes, podsRes, polRes, rbacRes, heatRes, radarRes, invRes, vulnRes, trendsRes, compRes, logRes] = await Promise.all([
+            const [sumRes, podsRes, polRes, rbacRes, heatRes, radarRes, invRes, vulnRes, trendsRes, compRes, metricsRes, logRes] = await Promise.all([
                 fetch(`${API_BASE}/api/summary`),
                 fetch(`${API_BASE}/api/pods`),
                 fetch(`${API_BASE}/api/network-policies`),
