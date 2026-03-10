@@ -30,6 +30,7 @@ function App() {
     const [vulnerabilities, setVulnerabilities] = useState({ pods: [], nodes: [], volumes: [], replica_sets: [], deployments: [] })
     const [trends, setTrends] = useState([])
     const [compliance, setCompliance] = useState([])
+    const [metrics, setMetrics] = useState({ pods: [], nodes: [] })
     const [logs, setLogs] = useState([])
     const [loading, setLoading] = useState(true)
     const [activeTab, setActiveTab] = useState('pods')
@@ -55,6 +56,7 @@ function App() {
                 fetch(`${API_BASE}/api/vulnerabilities`),
                 fetch(`${API_BASE}/api/trends`),
                 fetch(`${API_BASE}/api/compliance`),
+                fetch(`${API_BASE}/api/metrics`),
                 fetch(`${API_BASE}/api/logs`)
             ])
 
@@ -68,6 +70,7 @@ function App() {
             setVulnerabilities(await vulnRes.json())
             setTrends(await trendsRes.json())
             setCompliance(await compRes.json())
+            setMetrics(await metricsRes.json())
             setLogs(await logRes.json())
         } catch (err) {
             console.error("Data fetch error:", err)
@@ -345,7 +348,7 @@ function App() {
             {/* Tabs */}
             <div className="tabs-container">
                 <div className="tabs-list">
-                    {['pods', 'policies', 'rbac', 'inventory', 'vulnerabilities', 'compliance'].map(t => (
+                    {['pods', 'policies', 'rbac', 'inventory', 'vulnerabilities', 'compliance', 'monitoring'].map(t => (
                         <button key={t} onClick={() => { setActiveTab(t); if (t !== 'pods' && t !== 'inventory' && t !== 'vulnerabilities') setFilterNamespace(null) }} className={`tab-item ${activeTab === t ? 'active' : ''}`}>
                             {t.toUpperCase()}
                         </button>
@@ -398,6 +401,57 @@ function App() {
                                     </div>
                                 </div>
                             ))}
+                        </div>
+                    ) : activeTab === 'monitoring' ? (
+                        <div className="monitoring-view">
+                            <div className="metrics-summary-row">
+                                <div className="glass-card metric-card">
+                                    <h4>Node Utilization</h4>
+                                    <ResponsiveContainer width="100%" height={200}>
+                                        <BarChart data={metrics.nodes}>
+                                            <XAxis dataKey="name" stroke="#64748b" fontSize={10} />
+                                            <YAxis unit="%" stroke="#64748b" fontSize={10} />
+                                            <ReTooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b' }} />
+                                            <Bar dataKey="cpu_usage" fill="#3b82f6" name="CPU Usage %" radius={[4, 4, 0, 0]} />
+                                            <Bar dataKey="mem_usage" fill="#a855f7" name="Mem Usage %" radius={[4, 4, 0, 0]} />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                                <div className="glass-card metric-card">
+                                    <h4>Pod hotspots (CPU %)</h4>
+                                    <ResponsiveContainer width="100%" height={200}>
+                                        <PieChart>
+                                            <Pie data={metrics.pods} dataKey="cpu_usage" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5}>
+                                                {metrics.pods.map((entry, index) => <Cell key={index} fill={index % 2 === 0 ? '#3b82f6' : '#6366f1'} />)}
+                                            </Pie>
+                                            <ReTooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b' }} />
+                                        </PieChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </div>
+                            <table className="ent-table">
+                                <thead><tr><th>Pod</th><th>Namespace</th><th>CPU Utilization</th><th>Memory Utilization</th></tr></thead>
+                                <tbody>
+                                    {metrics.pods.map((p, idx) => (
+                                        <tr key={idx}>
+                                            <td>{p.name}</td>
+                                            <td>{p.namespace}</td>
+                                            <td>
+                                                <div className="progress-bar-container">
+                                                    <div className="progress-bar-fill" style={{ width: `${p.cpu_usage}%`, background: p.cpu_usage > 80 ? '#ef4444' : '#3b82f6' }}></div>
+                                                    <span className="progress-text">{p.cpu}</span>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <div className="progress-bar-container">
+                                                    <div className="progress-bar-fill" style={{ width: `${p.mem_usage}%`, background: p.mem_usage > 80 ? '#ef4444' : '#a855f7' }}></div>
+                                                    <span className="progress-text">{p.memory}</span>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
                     ) : activeTab === 'inventory' ? (
                         <>
