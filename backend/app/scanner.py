@@ -427,6 +427,19 @@ class K8sScanner:
                     "mitre": {"tactic": "Defense Evasion", "id": "T1562"}
                 })
 
+            # Internal Secrets Check (Env vs Volume)
+            if c.env:
+                for ev in c.env:
+                    if any(p in ev.name.lower() for p in SECRET_PATTERNS):
+                        risks.append({
+                            "type": "SecretAsEnv", 
+                            "msg": f"Sensitive env var '{ev.name}' in '{c.name}'.", 
+                            "cis": "5.4.2", 
+                            "category": "IAM", 
+                            "patch": "valueFrom: {secretKeyRef: {...}}",
+                            "mitre": {"tactic": "Credential Access", "id": "T1552"}
+                        })
+
             # Images
             if ":" not in c.image or c.image.endswith(":latest"):
                 risks.append({
@@ -448,7 +461,8 @@ class K8sScanner:
         return [
             {"name": "nginx-api", "namespace": "prod", "severity": "Critical", "risks": [
                 {"type": "Privileged", "msg": "Privileged container: nginx", "cis": "5.2.2", "category": "Runtime", "patch": "privileged: false", "mitre": {"tactic": "Execution", "id": "T1611"}},
-                {"type": "RunAsRoot", "msg": "Container 'nginx' may run as root.", "cis": "5.2.6", "category": "Runtime", "patch": "runAsNonRoot: true", "mitre": {"tactic": "Privilege Escalation", "id": "T1548"}}
+                {"type": "RunAsRoot", "msg": "Container 'nginx' may run as root.", "cis": "5.2.6", "category": "Runtime", "patch": "runAsNonRoot: true", "mitre": {"tactic": "Privilege Escalation", "id": "T1548"}},
+                {"type": "SecretAsEnv", "msg": "Sensitive env var 'DB_PASSWORD' in 'nginx'.", "cis": "5.4.2", "category": "IAM", "patch": "valueFrom: {secretKeyRef: {...}}", "mitre": {"tactic": "Credential Access", "id": "T1552"}}
             ]},
             {"name": "redis-cache", "namespace": "testing", "severity": "High", "risks": [
                 {"type": "ResourceLimits", "msg": "No resource limits for 'redis'.", "cis": "5.6.1", "category": "Runtime", "patch": "resources: {limits: {cpu: '500m', memory: '512Mi'}}", "mitre": {"tactic": "Impact", "id": "T1496"}},
