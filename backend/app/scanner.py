@@ -211,17 +211,19 @@ class K8sScanner:
         self._log("Auditing RBAC permissions depth...")
         if self.mock_mode: return [{"name": "admin-leak", "namespace": "Global", "subjects": ["User: dev-bot"], "severity": "High", "risks": [{"type": "StarPerms", "msg": "Wildcard used.", "cis": "5.1.1", "category": "IAM", "mitre": {"tactic": "Privilege Escalation", "id": "T1548"}}]}]
         try:
-            roles = self.rbac_v1.list_cluster_role(_request_timeout=3).items
+            cluster_roles = self.rbac_v1.list_cluster_role(_request_timeout=3).items
             results = []
-            for role in roles:
+            for cr in cluster_roles:
                 risks = []
-                for rule in (role.rules or []):
-                    if "*" in rule.verbs or "*" in rule.resources:
+                if not cr.rules: continue
+                for rule in cr.rules:
+                    if rule.resources and rule.verbs and "*" in rule.resources and "*" in rule.verbs:
                         risks.append({
-                            "type": "WildcardAccess", 
-                            "msg": f"Role '{role.metadata.name}' uses wildcards.", 
-                            "cis": "5.1.1", 
+                            "type": "RBAC Wildcard",
+                            "msg": f"ClusterRole {cr.metadata.name} has wildcard permissions.",
+                            "cis": "5.1.1",
                             "category": "IAM",
+                            "patch": "restrict resources/verbs",
                             "mitre": {"tactic": "Privilege Escalation", "id": "T1548"}
                         })
                 
@@ -491,5 +493,19 @@ class K8sScanner:
             "deployments": [
                 {"target": "web-deploy", "namespace": "default", "image": "redis:6.0", "id": "CVE-2023-41056", "severity": "High", "title": "Integer Overflow"},
                 {"target": "api-gateway", "namespace": "prod", "severity": "Medium", "id": "AVAIL-01", "title": "Missing PodDisruptionBudget", "remediation": "Create a PDB to ensure availability."}
+            ]
+        }
+
+    def _get_mock_metrics(self):
+        import random
+        return {
+            "pods": [
+                {"name": "nginx-api", "namespace": "prod", "cpu": f"{random.randint(10, 80)}%", "memory": f"{random.randint(100, 400)}Mi", "cpu_usage": random.randint(5, 95), "mem_usage": random.randint(10, 90)},
+                {"name": "redis-cache", "namespace": "testing", "cpu": f"{random.randint(5, 40)}%", "memory": f"{random.randint(200, 800)}Mi", "cpu_usage": random.randint(5, 95), "mem_usage": random.randint(10, 90)},
+                {"name": "webapp-01", "namespace": "default", "cpu": f"{random.randint(20, 60)}%", "memory": f"{random.randint(50, 200)}Mi", "cpu_usage": random.randint(5, 95), "mem_usage": random.randint(10, 90)}
+            ],
+            "nodes": [
+                {"name": "node-01", "cpu": "45%", "memory": "12Gi", "cpu_usage": 45, "mem_usage": 75},
+                {"name": "node-02", "cpu": "22%", "memory": "8Gi", "cpu_usage": 22, "mem_usage": 50}
             ]
         }
