@@ -312,6 +312,17 @@ class K8sScanner:
         if pod.spec.host_ipc:
             risks.append({"type": "HostIPC", "msg": "Host IPC usage.", "cis": "5.2.5", "category": "Host", "patch": "hostIPC: false", "mitre": {"tactic": "Privilege Escalation", "id": "T1611"}})
 
+        # Service Account Token
+        if pod.spec.automount_service_account_token is not False:
+             risks.append({
+                "type": "SAAutomount", 
+                "msg": "Service Account token is automounted.", 
+                "cis": "5.1.6", 
+                "category": "IAM", 
+                "patch": "automountServiceAccountToken: false",
+                "mitre": {"tactic": "Credential Access", "id": "T1552"}
+            })
+
         for c in pod.spec.containers:
             # Privileged
             if c.security_context and c.security_context.privileged:
@@ -394,7 +405,8 @@ class K8sScanner:
                 {"type": "RunAsRoot", "msg": "Container 'nginx' may run as root.", "cis": "5.2.6", "category": "Runtime", "patch": "runAsNonRoot: true", "mitre": {"tactic": "Privilege Escalation", "id": "T1548"}}
             ]},
             {"name": "redis-cache", "namespace": "testing", "severity": "High", "risks": [
-                {"type": "ResourceLimits", "msg": "No resource limits for 'redis'.", "cis": "5.6.1", "category": "Runtime", "patch": "resources: {limits: {cpu: '500m', memory: '512Mi'}}", "mitre": {"tactic": "Impact", "id": "T1496"}}
+                {"type": "ResourceLimits", "msg": "No resource limits for 'redis'.", "cis": "5.6.1", "category": "Runtime", "patch": "resources: {limits: {cpu: '500m', memory: '512Mi'}}", "mitre": {"tactic": "Impact", "id": "T1496"}},
+                {"type": "SAAutomount", "msg": "Service Account token is automounted.", "cis": "5.1.6", "category": "IAM", "patch": "automountServiceAccountToken: false", "mitre": {"tactic": "Credential Access", "id": "T1552"}}
             ]},
             {"name": "webapp-01", "namespace": "default", "severity": "High", "risks": [
                 {"type": "LatestTag", "msg": "Container 'webapp' uses :latest tag.", "cis": "5.4.1", "category": "Images", "patch": "image: nginx:1.25", "mitre": {"tactic": "Initial Access", "id": "T1204"}},
