@@ -8,7 +8,7 @@ services:
       - ~/.kube:/root/.kube:ro
       - ~/.minikube:/home/muhammadusama/.minikube:ro
     environment:
-      - MOCK_MODE=false
+      - MOCK_MODE=true
       - HOME=/root
 
   frontend:
