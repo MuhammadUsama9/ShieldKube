@@ -418,7 +418,7 @@ function App() {
                     ) : activeTab === 'vulnerabilities' ? (
                         <>
                             <div className="sub-tabs-list">
-                                {['pods', 'nodes', 'volumes', 'replica_sets', 'deployments'].map(vt => (
+                                {['pods', 'nodes', 'volumes', 'replica_sets', 'deployments', 'infrastructure'].map(vt => (
                                     <button key={vt} onClick={() => setActiveVulnTab(vt)} className={`sub-tab-item ${activeVulnTab === vt ? 'active' : ''}`}>
                                         {vt.replace('_', ' ')} ({vulnerabilities[vt]?.length || 0})
                                     </button>

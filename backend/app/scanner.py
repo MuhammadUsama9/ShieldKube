@@ -95,8 +95,22 @@ class K8sScanner:
         self._log("Running workload-centric CVE audit...")
         if self.mock_mode: return self._get_mock_deep_vulnerabilities()
         
-        results = {"pods": [], "nodes": [], "volumes": [], "replica_sets": [], "deployments": []}
+        results = {"pods": [], "nodes": [], "volumes": [], "replica_sets": [], "deployments": [], "infrastructure": []}
         try:
+            # Infrastructure check (ResourceQuota & LimitRange)
+            namespaces = self.v1.list_namespace(_request_timeout=3).items
+            quotas = self.v1.list_resource_quota_for_all_namespaces(_request_timeout=3).items
+            limits = self.v1.list_limit_range_for_all_namespaces(_request_timeout=3).items
+            
+            quota_ns = {q.metadata.namespace for q in quotas}
+            limit_ns = {l.metadata.namespace for l in limits}
+            
+            for ns in namespaces:
+                if ns.metadata.name.startswith("kube-") or ns.metadata.name == "default": continue
+                if ns.metadata.name not in quota_ns:
+                    results["infrastructure"].append({"target": ns.metadata.name, "severity": "Medium", "id": "INFRA-01", "title": "Missing ResourceQuota", "remediation": "Apply a ResourceQuota to prevent resource exhaustion."})
+                if ns.metadata.name not in limit_ns:
+                    results["infrastructure"].append({"target": ns.metadata.name, "severity": "Medium", "id": "INFRA-02", "title": "Missing LimitRange", "remediation": "Apply a LimitRange to set default resource bounds."})
             # Deployment scan
             deploys = self.apps_v1.list_deployment_for_all_namespaces(_request_timeout=3).items
             try:
@@ -464,6 +478,7 @@ class K8sScanner:
             ],
             "nodes": [{"target": "node-01", "severity": "High", "id": "NODE-K1", "title": "Kernel Exposure", "remediation": "Patch host OS"}],
             "volumes": [{"target": "data-vol", "severity": "Medium", "id": "VOL-E1", "title": "Non-encrypted storage"}],
+            "infrastructure": [{"target": "dev-ns", "severity": "Medium", "id": "INFRA-01", "title": "Missing ResourceQuota", "remediation": "Apply ResourceQuota limits."}],
             "replica_sets": [{"target": "web-rs", "namespace": "default", "image": "nginx:1.19", "id": "CVE-2021-23017", "severity": "High", "title": "Resolver buffer overflow"}],
             "deployments": [
                 {"target": "web-deploy", "namespace": "default", "image": "redis:6.0", "id": "CVE-2023-41056", "severity": "High", "title": "Integer Overflow"},
