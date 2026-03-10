@@ -1,4 +1,4 @@
-# 🛡️ ShieldKube
+# ShieldKube
 
 **ShieldKube** is a professional, high-performance Kubernetes security platform designed for real-time risk auditing and continuous monitoring. It provides deep visibility into your cluster's security posture by analyzing workloads, RBAC permissions, and infrastructure vulnerabilities.
 
