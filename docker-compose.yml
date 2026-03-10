@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    network_mode: host
+    volumes:
+      - ~/.kube:/root/.kube:ro
+      - ~/.minikube:/home/muhammadusama/.minikube:ro
+    environment:
+      - MOCK_MODE=false
+      - HOME=/root
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
