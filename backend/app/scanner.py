@@ -400,6 +400,19 @@ class K8sScanner:
                     "mitre": {"tactic": "Impact", "id": "T1496"}
                 })
 
+            # Security Profiles
+            seccomp = c.security_context.seccomp_profile if c.security_context else None
+            apparmor = pod.metadata.annotations.get(f"container.apparmor.security.beta.kubernetes.io/{c.name}") if pod.metadata.annotations else None
+            if not seccomp and not apparmor:
+                risks.append({
+                    "type": "NoSecurityProfile", 
+                    "msg": f"No AppArmor or Seccomp profile for '{c.name}'.", 
+                    "cis": "5.7.1", 
+                    "category": "Runtime", 
+                    "patch": "securityContext: {seccompProfile: {type: RuntimeDefault}}",
+                    "mitre": {"tactic": "Defense Evasion", "id": "T1562"}
+                })
+
             # Images
             if ":" not in c.image or c.image.endswith(":latest"):
                 risks.append({
@@ -429,7 +442,8 @@ class K8sScanner:
             ]},
             {"name": "webapp-01", "namespace": "default", "severity": "High", "risks": [
                 {"type": "LatestTag", "msg": "Container 'webapp' uses :latest tag.", "cis": "5.4.1", "category": "Images", "patch": "image: nginx:1.25", "mitre": {"tactic": "Initial Access", "id": "T1204"}},
-                {"type": "WritableRootFS", "msg": "Writable root filesystem in 'webapp'.", "cis": "5.2.8", "category": "Runtime", "patch": "readOnlyRootFilesystem: true", "mitre": {"tactic": "Persistence", "id": "T1499"}}
+                {"type": "WritableRootFS", "msg": "Writable root filesystem in 'webapp'.", "cis": "5.2.8", "category": "Runtime", "patch": "readOnlyRootFilesystem: true", "mitre": {"tactic": "Persistence", "id": "T1499"}},
+                {"type": "NoSecurityProfile", "msg": "No AppArmor or Seccomp profile for 'webapp'.", "cis": "5.7.1", "category": "Runtime", "patch": "securityContext: {seccompProfile: {type: RuntimeDefault}}", "mitre": {"tactic": "Defense Evasion", "id": "T1562"}}
             ]}
         ]
 
