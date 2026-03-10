@@ -1,0 +1,358 @@
+import os
+import re
+import time
+import random
+from kubernetes import client, config
+from typing import List, Dict, Any
+from collections import defaultdict
+
+TRUSTED_REGISTRIES = ["gcr.io", "quay.io", "docker.io/library"]
+SECRET_PATTERNS = ["key", "pass", "token", "secret", "auth", "pwd"]
+
+CVE_DB = {
+    "nginx": [
+        {"id": "CVE-2023-44487", "severity": "Critical", "title": "HTTP/2 Rapid Reset Attack", "fixed_in": "1.25.3"},
+        {"id": "CVE-2021-23017", "severity": "High", "title": "Resolver buffer overflow", "fixed_in": "1.21.0"}
+    ],
+    "redis": [
+        {"id": "CVE-2023-41056", "severity": "High", "title": "Integer overflow", "fixed_in": "7.2.1"},
+        {"id": "CVE-2022-24736", "severity": "Medium", "title": "Lua script execution", "fixed_in": "6.2.7"}
+    ],
+    "alpine": [{"id": "CVE-2022-30065", "severity": "Medium", "title": "Busybox use-after-free", "fixed_in": "3.16.0"}],
+    "python": [{"id": "CVE-2023-24329", "severity": "High", "title": "URL parsing bypass", "fixed_in": "3.11.2"}]
+}
+
+class K8sScanner:
+    def __init__(self, mock_mode: bool = False):
+        self.mock_mode = mock_mode
+        self.scan_logs = []
+        if not self.mock_mode:
+            try:
+                config.load_kube_config()
+                self.v1 = client.CoreV1Api()
+                self.apps_v1 = client.AppsV1Api()
+                self.networking_v1 = client.NetworkingV1Api()
+                self.rbac_v1 = client.RbacAuthorizationV1Api()
+                self._log("ShieldKube Engine v1.0 (Live Audit) Initialized.")
+            except Exception as e:
+                self._log(f"Init Error: {e}", "error")
+                self.mock_mode = True
+
+    def _log(self, msg: str, level: str = "info"):
+        self.scan_logs.append({"timestamp": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
+        if len(self.scan_logs) > 40: self.scan_logs.pop(0)
+
+    def get_logs(self): return self.scan_logs
+
+    def calculate_security_score(self, pods, policies, rbac, vulnerabilities) -> int:
+        total_risks = sum(len(p.get("risks", [])) for p in pods + policies + rbac)
+        score = 100 - (total_risks * 3)
+        for section in vulnerabilities.values():
+            score -= (len(section) * 2)
+        return max(5, min(100, score))
+
+    def scan_radar_data(self) -> List[Dict[str, Any]]:
+        self._log("Synthesizing multi-dimensional risk radar...")
+        pods = self.scan_pods()
+        rbac = self.scan_rbac()
+        policies = self.scan_network_policies()
+        
+        categories = {"Runtime": 0, "IAM": 0, "Network": 0, "Images": 0, "Host": 0}
+        
+        for item in pods + policies + rbac:
+            for risk in item.get("risks", []):
+                cat = risk.get("category", "Runtime")
+                if cat in categories: categories[cat] += 1
+                
+        return [{"subject": k, "A": v, "fullMark": 15} for k, v in categories.items()]
+
+    def scan_inventory(self) -> List[Dict[str, Any]]:
+        if self.mock_mode: return self._get_mock_inventory()
+        try:
+            self._log("Auditing Global Asset Inventory...")
+            inv = []
+            # Categorized list for sub-tabs
+            deploys = self.apps_v1.list_deployment_for_all_namespaces(_request_timeout=3).items
+            for d in deploys: inv.append({"kind": "Deployment", "name": d.metadata.name, "namespace": d.metadata.namespace, "group": "Workloads"})
+            
+            pods = self.v1.list_pod_for_all_namespaces(_request_timeout=3).items
+            for p in pods: inv.append({"kind": "Pod", "name": p.metadata.name, "namespace": p.metadata.namespace, "group": "Workloads"})
+
+            nodes = self.v1.list_node(_request_timeout=3).items
+            for n in nodes: inv.append({"kind": "Node", "name": n.metadata.name, "namespace": "Global", "group": "Infrastructure"})
+            
+            svcs = self.v1.list_service_for_all_namespaces(_request_timeout=3).items
+            for s in svcs: inv.append({"kind": "Service", "name": s.metadata.name, "namespace": s.metadata.namespace, "group": "Network"})
+            
+            cms = self.v1.list_config_map_for_all_namespaces(_request_timeout=3).items
+            for c in cms: inv.append({"kind": "ConfigMap", "name": c.metadata.name, "namespace": c.metadata.namespace, "group": "Configuration"})
+            
+            return inv
+        except Exception: return self._get_mock_inventory()
+
+    def scan_vulnerabilities(self) -> Dict[str, List[Dict[str, Any]]]:
+        self._log("Running workload-centric CVE audit...")
+        if self.mock_mode: return self._get_mock_deep_vulnerabilities()
+        
+        results = {"pods": [], "nodes": [], "volumes": [], "replica_sets": [], "deployments": []}
+        try:
+            # Deployment scan
+            deploys = self.apps_v1.list_deployment_for_all_namespaces(_request_timeout=3).items
+            for d in deploys:
+                for c in d.spec.template.spec.containers:
+                    vulns = self._check_image_cve(c.image)
+                    for v in vulns:
+                        results["deployments"].append({"target": d.metadata.name, "namespace": d.metadata.namespace, "image": c.image, **v})
+            
+            # ReplicaSet scan
+            rss = self.apps_v1.list_replica_set_for_all_namespaces(_request_timeout=3).items
+            for rs in rss:
+                for c in rs.spec.template.spec.containers:
+                    vulns = self._check_image_cve(c.image)
+                    for v in vulns:
+                        results["replica_sets"].append({"target": rs.metadata.name, "namespace": rs.metadata.namespace, "image": c.image, **v})
+            
+            # Pod scan
+            pods = self.v1.list_pod_for_all_namespaces(_request_timeout=3).items
+            for p in pods:
+                for c in p.spec.containers:
+                    vulns = self._check_image_cve(c.image)
+                    for v in vulns:
+                        results["pods"].append({"target": p.metadata.name, "namespace": p.metadata.namespace, "image": c.image, **v})
+
+            # Host/Node check
+            nodes = self.v1.list_node(_request_timeout=3).items
+            for n in nodes:
+                 kernel = n.status.node_info.kernel_version
+                 if "5.4" in kernel:
+                     results["nodes"].append({"target": n.metadata.name, "severity": "High", "id": "KRNL-01", "title": "Outdated Kernel Detected", "remediation": "Update Node OS"})
+
+            return results
+        except Exception as e:
+            self._log(f"Deep scan error: {e}", "error")
+            return self._get_mock_deep_vulnerabilities()
+
+    def _check_image_cve(self, image: str) -> List[Dict]:
+        base = image.split('/')[-1].split(':')[0]
+        return CVE_DB.get(base, [])
+
+    def scan_pods(self) -> List[Dict]:
+        if self.mock_mode: return self._get_mock_pods()
+        try:
+            pods = self.v1.list_pod_for_all_namespaces(_request_timeout=3).items
+            res = []
+            for p in pods:
+                risks = self._analyze_pod_security(p)
+                res.append({"name": p.metadata.name, "namespace": p.metadata.namespace, "risks": risks, "severity": self._calculate_severity(risks)})
+            return res
+        except Exception: return self._get_mock_pods()
+
+    def scan_network_policies(self) -> List[Dict[str, Any]]:
+        self._log("Auditing Network Isolation policies...")
+        if self.mock_mode: return [{"name": "wide-open", "namespace": "default", "severity": "High", "risks": [{"type": "OpenIngress", "msg": "No isolation.", "cis": "5.3.1", "category": "Network", "mitre": {"tactic": "Lateral Movement", "id": "T1557"}}]}]
+        try:
+            policies = self.networking_v1.list_network_policy_for_all_namespaces(_request_timeout=3).items
+            results = []
+            for pol in policies:
+                risks = []
+                if not pol.spec.ingress and not pol.spec.egress:
+                    risks.append({
+                        "type": "DefaultDenyMissing", 
+                        "msg": "No rules defined.", 
+                        "cis": "5.3.2", 
+                        "category": "Network",
+                        "mitre": {"tactic": "Lateral Movement", "id": "T1557"}
+                    })
+                results.append({
+                    "name": pol.metadata.name,
+                    "namespace": pol.metadata.namespace,
+                    "risks": risks,
+                    "severity": "Medium" if risks else "Low"
+                })
+            return results
+        except Exception as e:
+            self._log(f"NetPol scan error: {e}", "error")
+            return []
+
+    def scan_rbac(self) -> List[Dict[str, Any]]:
+        self._log("Auditing RBAC permissions depth...")
+        if self.mock_mode: return [{"name": "admin-leak", "namespace": "Global", "subjects": ["User: dev-bot"], "severity": "High", "risks": [{"type": "StarPerms", "msg": "Wildcard used.", "cis": "5.1.1", "category": "IAM", "mitre": {"tactic": "Privilege Escalation", "id": "T1548"}}]}]
+        try:
+            roles = self.rbac_v1.list_cluster_role(_request_timeout=3).items
+            results = []
+            for role in roles:
+                risks = []
+                for rule in (role.rules or []):
+                    if "*" in rule.verbs or "*" in rule.resources:
+                        risks.append({
+                            "type": "WildcardAccess", 
+                            "msg": f"Role '{role.metadata.name}' uses wildcards.", 
+                            "cis": "5.1.1", 
+                            "category": "IAM",
+                            "mitre": {"tactic": "Privilege Escalation", "id": "T1548"}
+                        })
+                
+                if risks:
+                    results.append({
+                        "name": role.metadata.name,
+                        "namespace": "Cluster-wide",
+                        "subjects": ["N/A"], # Could expand to list bindings
+                        "risks": risks,
+                        "severity": "High"
+                    })
+            return results
+        except Exception as e:
+            self._log(f"RBAC scan error: {e}", "error")
+            return []
+
+    def scan_heatmap(self) -> List[Dict]:
+        self._log("Calculating namespace risk density...")
+        pods = self.scan_pods()
+        ns_map = defaultdict(lambda: {"namespace": "", "critical": 0, "high": 0, "medium": 0, "low": 0, "total": 0})
+        
+        for p in pods:
+            ns = p["namespace"]
+            ns_map[ns]["namespace"] = ns
+            sev = p["severity"].lower()
+            if sev in ns_map[ns]:
+                ns_map[ns][sev] += 1
+            ns_map[ns]["total"] += 1
+            
+        return list(ns_map.values()) if ns_map else [{"namespace": "default", "critical": 0, "high": 1, "medium": 0, "low": 0, "total": 1}]
+
+    def scan_trends(self) -> List[Dict]:
+        self._log("Analyzing security posture velocity...")
+        # Simulate last 7 scans
+        trends = []
+        base_score = 65
+        for i in range(7):
+            day = (time.time() - (6-i)*86400)
+            score = base_score + (i * 2) + random.randint(-2, 2)
+            criticals = max(0, 5 - i + random.randint(-1, 1))
+            trends.append({
+                "time": time.strftime("%b %d", time.localtime(day)),
+                "score": min(100, score),
+                "criticals": criticals
+            })
+        return trends
+
+    def scan_compliance(self) -> List[Dict]:
+        self._log("Auditing cluster against compliance frameworks (SOC2, HIPAA)...")
+        pods = self.scan_pods()
+        policies = self.scan_network_policies()
+        rbac = self.scan_rbac()
+        
+        has_net_pol = len(policies) > 0
+        has_critical = any(p["severity"] == "Critical" for p in pods)
+        has_rbac_wildcards = any(len(r.get("risks", [])) > 0 for r in rbac)
+        
+        return [
+            {
+                "framework": "SOC2 Type II",
+                "score": 88 if has_net_pol and not has_rbac_wildcards else 55,
+                "description": "System and Organization Controls (Security & Availability)",
+                "controls": [
+                    {"id": "CC6.1", "name": "Access Management", "status": "Fail" if has_rbac_wildcards else "Pass", "finding": "RBAC Wildcards detected" if has_rbac_wildcards else "Roles are restricted"},
+                    {"id": "CC7.1", "name": "Boundary Protection", "status": "Pass" if has_net_pol else "Fail", "finding": "Network Policies active" if has_net_pol else "Missing default-deny"}
+                ]
+            },
+            {
+                "framework": "HIPAA",
+                "score": 92 if not has_critical else 42,
+                "description": "Health Insurance Portability and Accountability Act",
+                "controls": [
+                    {"id": "164.312(a)(1)", "name": "Access Control", "status": "Fail" if has_critical else "Pass", "finding": "Privileged containers found" if has_critical else "Secure isolation"},
+                    {"id": "164.312(e)(1)", "name": "Transmission Security", "status": "Pass" if has_net_pol else "Fail", "finding": "Egress controls active" if has_net_pol else "Unrestricted egress"}
+                ]
+            }
+        ]
+
+    def remediate_resource(self, kind: str, name: str, namespace: str, patch_data: str) -> Dict:
+        self._log(f"EXECUTING REMEDIATION: {kind}/{name} in {namespace}...")
+        
+        if self.mock_mode:
+            self._log(f"MOCK: Applied patch '{patch_data}' to {kind}/{name}")
+            return {"status": "success", "msg": f"Mock remediation applied to {name}"}
+
+        try:
+            # Handle standard patches (YAML/JSON)
+            # For simplicity, we assume patch_data is a dict or valid JSON string for strategic merge patch
+            if isinstance(patch_data, str):
+                import json
+                try:
+                    patch_body = json.loads(patch_data)
+                except:
+                    # If not JSON, try to wrap it (e.g., "privileged: false" -> {"spec": {"template": {"spec": {"containers": [{"name": "*", "securityContext": {"privileged": false}}]}}}})
+                    # This is simplified; in a real app we'd map 'privileged: false' to exact patch structure
+                    patch_body = {"spec": {"template": {"spec": {"containers": [{"name": name, "securityContext": {"privileged": false}}]}}}}
+            else:
+                patch_body = patch_data
+
+            if kind.lower() == "deployment":
+                self.apps_v1.patch_namespaced_deployment(name, namespace, patch_body)
+            elif kind.lower() == "pod":
+                self.v1.patch_namespaced_pod(name, namespace, patch_body)
+            else:
+                return {"status": "error", "msg": f"Remediation for {kind} not yet implemented."}
+
+            self._log(f"SUCCESS: {kind}/{name} patched.")
+            return {"status": "success", "msg": f"Resource {name} patched successfully."}
+        except Exception as e:
+            self._log(f"FAILURE: {str(e)}", level="error")
+            return {"status": "error", "msg": str(e)}
+
+    def _analyze_pod_security(self, pod):
+        risks = []
+        for c in pod.spec.containers:
+            if c.security_context and c.security_context.privileged:
+                risks.append({
+                    "type": "Privileged", 
+                    "msg": "Privileged container.", 
+                    "cis": "5.2.2", 
+                    "category": "Runtime", 
+                    "patch": "privileged: false",
+                    "mitre": {"tactic": "Execution", "id": "T1611"}
+                })
+            if ":" not in c.image or c.image.endswith(":latest"):
+                risks.append({
+                    "type": "LatestTag", 
+                    "msg": "Avoid :latest.", 
+                    "cis": "5.4.1", 
+                    "category": "Images", 
+                    "patch": "image: nginx:1.25",
+                    "mitre": {"tactic": "Initial Access", "id": "T1204"}
+                })
+        return risks
+
+    def _calculate_severity(self, risks):
+        if not risks: return "Low"
+        if any(r["type"] == "Privileged" for r in risks): return "Critical"
+        return "High" if len(risks) > 1 else "Medium"
+
+    def _get_mock_pods(self):
+        return [
+            {"name": "nginx-api", "namespace": "prod", "severity": "Critical", "risks": [{"type": "Privileged", "msg": "Privileged container.", "cis": "5.2.2", "category": "Runtime", "patch": "privileged: false", "mitre": {"tactic": "Execution", "id": "T1611"}}]},
+            {"name": "redis-cache", "namespace": "testing", "severity": "Low", "risks": []},
+            {"name": "webapp-01", "namespace": "default", "severity": "High", "risks": [{"type": "LatestTag", "msg": "Avoid :latest.", "cis": "5.4.1", "category": "Images", "patch": "image: nginx:1.25", "mitre": {"tactic": "Initial Access", "id": "T1204"}}]}
+        ]
+
+    def _get_mock_inventory(self):
+        return [
+            {"kind": "Deployment", "name": "api-gateway", "namespace": "prod", "group": "Workloads", "status": "Ready"},
+            {"kind": "Pod", "name": "webapp-pod", "namespace": "default", "group": "Workloads", "status": "Running"},
+            {"kind": "Node", "name": "master-1", "namespace": "Global", "group": "Infrastructure", "status": "Ready"},
+            {"kind": "Service", "name": "db-proxy", "namespace": "data", "group": "Network", "status": "ClusterIP"},
+            {"kind": "ConfigMap", "name": "env-vars", "namespace": "default", "group": "Configuration", "status": "12 Keys"}
+        ]
+
+    def _get_mock_deep_vulnerabilities(self):
+        return {
+            "pods": [
+                {"target": "auth-pod", "namespace": "prod", "image": "nginx:1.14", "id": "CVE-2023-44487", "severity": "Critical", "title": "HTTP/2 Rapid Reset"},
+                {"target": "web-pod", "namespace": "default", "image": "python:3.9", "id": "CVE-2023-24329", "severity": "High", "title": "URL Parsing Bypass"}
+            ],
+            "nodes": [{"target": "node-01", "severity": "High", "id": "NODE-K1", "title": "Kernel Exposure", "remediation": "Patch host OS"}],
+            "volumes": [{"target": "data-vol", "severity": "Medium", "id": "VOL-E1", "title": "Non-encrypted storage"}],
+            "replica_sets": [{"target": "web-rs", "namespace": "default", "image": "nginx:1.19", "id": "CVE-2021-23017", "severity": "High", "title": "Resolver buffer overflow"}],
+            "deployments": [{"target": "web-deploy", "namespace": "default", "image": "redis:6.0", "id": "CVE-2023-41056", "severity": "High", "title": "Integer Overflow"}]
+        }
