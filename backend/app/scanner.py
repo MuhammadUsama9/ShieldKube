@@ -33,6 +33,7 @@ class K8sScanner:
                 self.apps_v1 = client.AppsV1Api()
                 self.networking_v1 = client.NetworkingV1Api()
                 self.rbac_v1 = client.RbacAuthorizationV1Api()
+                self.policy_v1 = client.PolicyV1Api()
                 self._log("ShieldKube Engine v1.0 (Live Audit) Initialized.")
             except Exception as e:
                 self._log(f"Init Error: {e}", "error")
@@ -98,7 +99,25 @@ class K8sScanner:
         try:
             # Deployment scan
             deploys = self.apps_v1.list_deployment_for_all_namespaces(_request_timeout=3).items
+            try:
+                pdbs = self.policy_v1.list_pod_disruption_budget_for_all_namespaces(_request_timeout=3).items
+                pdb_map = {(p.metadata.namespace, p.spec.selector.match_labels.get("app")): True for p in pdbs if p.spec.selector and p.spec.selector.match_labels}
+            except:
+                pdb_map = {}
+
             for d in deploys:
+                # PDB Audit
+                app_label = d.spec.selector.match_labels.get("app") if d.spec.selector and d.spec.selector.match_labels else None
+                if app_label and (d.metadata.namespace, app_label) not in pdb_map:
+                     results["deployments"].append({
+                        "target": d.metadata.name, 
+                        "namespace": d.metadata.namespace, 
+                        "severity": "Medium", 
+                        "id": "AVAIL-01", 
+                        "title": "Missing PodDisruptionBudget", 
+                        "remediation": "Create a PDB to ensure availability during maintenance."
+                    })
+
                 for c in d.spec.template.spec.containers:
                     vulns = self._check_image_cve(c.image)
                     for v in vulns:
@@ -432,5 +451,8 @@ class K8sScanner:
             "nodes": [{"target": "node-01", "severity": "High", "id": "NODE-K1", "title": "Kernel Exposure", "remediation": "Patch host OS"}],
             "volumes": [{"target": "data-vol", "severity": "Medium", "id": "VOL-E1", "title": "Non-encrypted storage"}],
             "replica_sets": [{"target": "web-rs", "namespace": "default", "image": "nginx:1.19", "id": "CVE-2021-23017", "severity": "High", "title": "Resolver buffer overflow"}],
-            "deployments": [{"target": "web-deploy", "namespace": "default", "image": "redis:6.0", "id": "CVE-2023-41056", "severity": "High", "title": "Integer Overflow"}]
+            "deployments": [
+                {"target": "web-deploy", "namespace": "default", "image": "redis:6.0", "id": "CVE-2023-41056", "severity": "High", "title": "Integer Overflow"},
+                {"target": "api-gateway", "namespace": "prod", "severity": "Medium", "id": "AVAIL-01", "title": "Missing PodDisruptionBudget", "remediation": "Create a PDB to ensure availability."}
+            ]
         }
