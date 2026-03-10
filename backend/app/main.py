@@ -89,6 +89,10 @@ async def get_logs():
 async def get_compliance():
     return scanner.scan_compliance()
 
+@app.get("/api/metrics")
+async def get_metrics():
+    return scanner.scan_metrics()
+
 @app.post("/api/remediate")
 async def remediate(data: dict):
     return scanner.remediate_resource(

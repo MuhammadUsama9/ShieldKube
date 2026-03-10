@@ -269,36 +269,16 @@ class K8sScanner:
             })
         return trends
 
-    def scan_compliance(self) -> List[Dict]:
-        self._log("Auditing cluster against compliance frameworks (SOC2, HIPAA)...")
-        pods = self.scan_pods()
-        policies = self.scan_network_policies()
-        rbac = self.scan_rbac()
-        
-        has_net_pol = len(policies) > 0
-        has_critical = any(p["severity"] == "Critical" for p in pods)
-        has_rbac_wildcards = any(len(r.get("risks", [])) > 0 for r in rbac)
-        
-        return [
-            {
-                "framework": "SOC2 Type II",
-                "score": 88 if has_net_pol and not has_rbac_wildcards else 55,
-                "description": "System and Organization Controls (Security & Availability)",
-                "controls": [
-                    {"id": "CC6.1", "name": "Access Management", "status": "Fail" if has_rbac_wildcards else "Pass", "finding": "RBAC Wildcards detected" if has_rbac_wildcards else "Roles are restricted"},
-                    {"id": "CC7.1", "name": "Boundary Protection", "status": "Pass" if has_net_pol else "Fail", "finding": "Network Policies active" if has_net_pol else "Missing default-deny"}
-                ]
-            },
-            {
-                "framework": "HIPAA",
-                "score": 92 if not has_critical else 42,
-                "description": "Health Insurance Portability and Accountability Act",
-                "controls": [
-                    {"id": "164.312(a)(1)", "name": "Access Control", "status": "Fail" if has_critical else "Pass", "finding": "Privileged containers found" if has_critical else "Secure isolation"},
-                    {"id": "164.312(e)(1)", "name": "Transmission Security", "status": "Pass" if has_net_pol else "Fail", "finding": "Egress controls active" if has_net_pol else "Unrestricted egress"}
-                ]
-            }
-        ]
+    def scan_compliance(self):
+        self._log("Running CIS Compliance audit...")
+        if self.mock_mode: return self._get_mock_compliance()
+        return []
+
+    def scan_metrics(self):
+        self._log("Fetching resource metrics...")
+        if self.mock_mode: return self._get_mock_metrics()
+        # In a real cluster, this would query Metrics Server or Prometheus
+        return {"pods": [], "nodes": []}
 
     def remediate_resource(self, kind: str, name: str, namespace: str, patch_data: str) -> Dict:
         self._log(f"EXECUTING REMEDIATION: {kind}/{name} in {namespace}...")
