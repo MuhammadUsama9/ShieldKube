@@ -427,6 +427,19 @@ class K8sScanner:
                     "mitre": {"tactic": "Defense Evasion", "id": "T1562"}
                 })
 
+            # HostPort check
+            if c.ports:
+                for p in c.ports:
+                    if p.host_port:
+                        risks.append({
+                            "type": "HostPort", 
+                            "msg": f"HostPort '{p.host_port}' used in '{c.name}'.", 
+                            "cis": "5.2.10", 
+                            "category": "Network", 
+                            "patch": "hostPort: null",
+                            "mitre": {"tactic": "Infiltration", "id": "T1567"}
+                        })
+            
             # Internal Secrets Check (Env vs Volume)
             if c.env:
                 for ev in c.env:
@@ -466,7 +479,8 @@ class K8sScanner:
             ]},
             {"name": "redis-cache", "namespace": "testing", "severity": "High", "risks": [
                 {"type": "ResourceLimits", "msg": "No resource limits for 'redis'.", "cis": "5.6.1", "category": "Runtime", "patch": "resources: {limits: {cpu: '500m', memory: '512Mi'}}", "mitre": {"tactic": "Impact", "id": "T1496"}},
-                {"type": "SAAutomount", "msg": "Service Account token is automounted.", "cis": "5.1.6", "category": "IAM", "patch": "automountServiceAccountToken: false", "mitre": {"tactic": "Credential Access", "id": "T1552"}}
+                {"type": "SAAutomount", "msg": "Service Account token is automounted.", "cis": "5.1.6", "category": "IAM", "patch": "automountServiceAccountToken: false", "mitre": {"tactic": "Credential Access", "id": "T1552"}},
+                {"type": "HostPort", "msg": "HostPort '6379' used in 'redis'.", "cis": "5.2.10", "category": "Network", "patch": "hostPort: null", "mitre": {"tactic": "Infiltration", "id": "T1567"}}
             ]},
             {"name": "webapp-01", "namespace": "default", "severity": "High", "risks": [
                 {"type": "LatestTag", "msg": "Container 'webapp' uses :latest tag.", "cis": "5.4.1", "category": "Images", "patch": "image: nginx:1.25", "mitre": {"tactic": "Initial Access", "id": "T1204"}},
