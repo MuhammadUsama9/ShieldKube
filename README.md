@@ -3,7 +3,6 @@
 **ShieldKube** is a professional, high-performance Kubernetes security platform designed for real-time risk auditing and continuous monitoring. It provides deep visibility into your cluster's security posture by analyzing workloads, RBAC permissions, infrastructure vulnerabilities, live metrics, and cluster events.
 
 ## Dashboard Overview
-> **Note to Contributor**: Please add your screenshots below using `![Dashboard Screenshot](path/to/image.png)`.
 > <img width="1527" height="756" alt="image" src="https://github.com/user-attachments/assets/79d1c921-47cb-414b-8772-e682b49a0e05" />
 
 
