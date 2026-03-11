@@ -4,6 +4,8 @@
 
 ## Dashboard Overview
 > **Note to Contributor**: Please add your screenshots below using `![Dashboard Screenshot](path/to/image.png)`.
+> <img width="1527" height="756" alt="image" src="https://github.com/user-attachments/assets/79d1c921-47cb-414b-8772-e682b49a0e05" />
+
 
 ![ShieldKube Main Dashboard]() *(Add main dashboard screenshot here)*
 ![ShieldKube Live Monitoring]() *(Add live monitoring screenshot here)*
