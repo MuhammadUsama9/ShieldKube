@@ -452,6 +452,32 @@ function App() {
                                     ))}
                                 </tbody>
                             </table>
+
+                            <h4 style={{marginTop: '2rem', marginBottom: '1rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontSize: '0.9rem', letterSpacing: '0.05em'}}>Cluster Nodes</h4>
+                            <table className="ent-table">
+                                <thead><tr><th>Node</th><th>CPU Scale</th><th>Memory Scale</th><th>CPU Utilization</th><th>Memory Utilization</th></tr></thead>
+                                <tbody>
+                                    {metrics.nodes.map((n, idx) => (
+                                        <tr key={idx}>
+                                            <td>{n.name}</td>
+                                            <td>{n.cpu}</td>
+                                            <td>{n.memory}</td>
+                                            <td>
+                                                <div className="progress-bar-container">
+                                                    <div className="progress-bar-fill" style={{ width: `${n.cpu_usage}%`, background: n.cpu_usage > 80 ? '#ef4444' : '#3b82f6' }}></div>
+                                                    <span className="progress-text">{n.cpu_usage}%</span>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <div className="progress-bar-container">
+                                                    <div className="progress-bar-fill" style={{ width: `${n.mem_usage}%`, background: n.mem_usage > 80 ? '#ef4444' : '#a855f7' }}></div>
+                                                    <span className="progress-text">{n.mem_usage}%</span>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
                     ) : activeTab === 'inventory' ? (
                         <>
