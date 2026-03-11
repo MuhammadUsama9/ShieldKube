@@ -276,11 +276,99 @@ class K8sScanner:
         if self.mock_mode: return self._get_mock_compliance()
         return []
 
+    def _get_mock_compliance(self):
+        return [
+            {
+                "framework": "CIS Kubernetes Benchmark v1.6.0",
+                "description": "Baseline security posture for Kubernetes clusters",
+                "score": 68,
+                "controls": [
+                    {"id": "5.1.1", "name": "Ensure that the cluster-admin role is only used where required", "status": "Failed", "finding": "Found 2 ServiceAccounts with cluster-admin"},
+                    {"id": "5.2.2", "name": "Minimize the admission of privileged containers", "status": "Failed", "finding": "1 privileged pod running in default namespace"},
+                    {"id": "5.2.8", "name": "Minimize the admission of containers with the NET_RAW capability", "status": "Passed", "finding": "No containers with NET_RAW detected"}
+                ]
+            },
+            {
+                "framework": "NSA/CISA Kubernetes Security Guidance",
+                "description": "Hardening guidance for cloud clusters",
+                "score": 85,
+                "controls": [
+                    {"id": "NSA-01", "name": "Pod Security Policies/Admission", "status": "Passed", "finding": "PodSecurity admission controller enabled"},
+                    {"id": "NSA-02", "name": "Network Separation", "status": "Failed", "finding": "Default namespace allows any ingress"}
+                ]
+            }
+        ]
+
+    def _parse_cpu(self, cpu_str: str) -> float:
+        try:
+            if cpu_str.endswith("n"): return float(cpu_str[:-1]) / 1_000_000_000
+            if cpu_str.endswith("u"): return float(cpu_str[:-1]) / 1_000_000
+            if cpu_str.endswith("m"): return float(cpu_str[:-1]) / 1_000
+            if cpu_str.endswith("k"): return float(cpu_str[:-1]) * 1_000
+            return float(cpu_str)
+        except: return 0.0
+
+    def _parse_memory(self, mem_str: str) -> float:
+        try:
+            if mem_str.endswith("Ki"): return float(mem_str[:-2]) / 1024
+            if mem_str.endswith("Mi"): return float(mem_str[:-2])
+            if mem_str.endswith("Gi"): return float(mem_str[:-2]) * 1024
+            if mem_str.endswith("Ti"): return float(mem_str[:-2]) * 1024 * 1024
+            return float(mem_str) / (1024 * 1024) # assuming bytes
+        except: return 0.0
+
     def scan_metrics(self):
         self._log("Fetching resource metrics...")
         if self.mock_mode: return self._get_mock_metrics()
-        # In a real cluster, this would query Metrics Server or Prometheus
-        return {"pods": [], "nodes": []}
+        
+        try:
+            custom_api = client.CustomObjectsApi()
+            pod_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "pods")
+            node_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
+            
+            pods_data = []
+            for item in pod_metrics.get("items", []):
+                name = item["metadata"]["name"]
+                ns = item["metadata"]["namespace"]
+                cpu_total = 0.0
+                mem_total = 0.0
+                for c in item.get("containers", []):
+                    cpu_total += self._parse_cpu(c["usage"]["cpu"])
+                    mem_total += self._parse_memory(c["usage"]["memory"])
+                
+                cpu_pct = min(100, int(cpu_total * 100)) # Approximation: 1 core = 100% capacity for a small pod footprint
+                mem_pct = min(100, int((mem_total / 1024) * 100)) # Approximation: 1GB = 100% capacity
+                
+                pods_data.append({
+                    "name": name,
+                    "namespace": ns,
+                    "cpu": f"{cpu_total:.3f} cores",
+                    "memory": f"{mem_total:.1f} Mi",
+                    "cpu_usage": max(1, cpu_pct),
+                    "mem_usage": max(1, mem_pct)
+                })
+                
+            nodes_data = []
+            for item in node_metrics.get("items", []):
+                name = item["metadata"]["name"]
+                cpu_total = self._parse_cpu(item["usage"]["cpu"])
+                mem_total = self._parse_memory(item["usage"]["memory"])
+                
+                cpu_pct = min(100, int((cpu_total / 2) * 100))  # Assuming 2 CPU cores total
+                mem_pct = min(100, int((mem_total / 2048) * 100)) # Assuming 2GB total
+                
+                nodes_data.append({
+                    "name": name,
+                    "cpu": f"{cpu_total:.1f} CPU",
+                    "memory": f"{mem_total:.0f} Mi",
+                    "cpu_usage": max(1, cpu_pct),
+                    "mem_usage": max(1, mem_pct)
+                })
+                
+            return {"pods": pods_data, "nodes": nodes_data}
+        except Exception as e:
+            self._log(f"Metrics Error: {e}", "error")
+            return {"pods": [], "nodes": []}
 
     def remediate_resource(self, kind: str, name: str, namespace: str, patch_data: str) -> Dict:
         self._log(f"EXECUTING REMEDIATION: {kind}/{name} in {namespace}...")
