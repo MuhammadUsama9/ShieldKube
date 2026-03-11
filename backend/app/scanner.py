@@ -276,6 +276,33 @@ class K8sScanner:
         if self.mock_mode: return self._get_mock_compliance()
         return []
 
+    def scan_events(self) -> List[Dict[str, Any]]:
+        self._log("Fetching recent cluster events...")
+        if self.mock_mode: return self._get_mock_events()
+        try:
+            events = self.v1.list_event_for_all_namespaces(_request_timeout=3).items
+            # Sort by last timestamp if available
+            def get_time(e):
+                return e.last_timestamp or e.event_time or e.metadata.creation_timestamp
+            
+            valid_events = [e for e in events if get_time(e)]
+            valid_events.sort(key=get_time, reverse=True)
+            res = []
+            for e in valid_events[:50]:
+                res.append({
+                    "reason": e.reason,
+                    "message": e.message,
+                    "type": e.type,
+                    "object": f"{e.involved_object.kind}/{e.involved_object.name}" if e.involved_object else "Unknown",
+                    "namespace": e.involved_object.namespace if e.involved_object else "Unknown",
+                    "count": e.count or 1,
+                    "time": str(get_time(e))
+                })
+            return res
+        except Exception as e:
+            self._log(f"Events Error: {e}", "error")
+            return self._get_mock_events() if self.mock_mode else []
+
     def _get_mock_compliance(self):
         return [
             {
@@ -297,6 +324,13 @@ class K8sScanner:
                     {"id": "NSA-02", "name": "Network Separation", "status": "Failed", "finding": "Default namespace allows any ingress"}
                 ]
             }
+        ]
+
+    def _get_mock_events(self):
+        return [
+            {"reason": "BackOff", "message": "Back-off restarting failed container", "type": "Warning", "object": "Pod/nginx-api", "namespace": "prod", "count": 21, "time": "2023-11-20 14:32:00+00:00"},
+            {"reason": "FailedScheduling", "message": "0/3 nodes are available: 3 Insufficient cpu.", "type": "Warning", "object": "Pod/redis-cache", "namespace": "testing", "count": 1, "time": "2023-11-20 14:30:00+00:00"},
+            {"reason": "Scheduled", "message": "Successfully assigned default/webapp-01 to node-01", "type": "Normal", "object": "Pod/webapp-01", "namespace": "default", "count": 1, "time": "2023-11-20 14:28:00+00:00"}
         ]
 
     def _parse_cpu(self, cpu_str: str) -> float:

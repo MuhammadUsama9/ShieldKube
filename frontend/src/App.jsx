@@ -31,6 +31,7 @@ function App() {
     const [trends, setTrends] = useState([])
     const [compliance, setCompliance] = useState([])
     const [metrics, setMetrics] = useState({ pods: [], nodes: [] })
+    const [events, setEvents] = useState([])
     const [logs, setLogs] = useState([])
     const [loading, setLoading] = useState(true)
     const [activeTab, setActiveTab] = useState('pods')
@@ -45,7 +46,7 @@ function App() {
 
     const fetchData = async () => {
         try {
-            const [sumRes, podsRes, polRes, rbacRes, heatRes, radarRes, invRes, vulnRes, trendsRes, compRes, metricsRes, logRes] = await Promise.all([
+            const [sumRes, podsRes, polRes, rbacRes, heatRes, radarRes, invRes, vulnRes, trendsRes, compRes, metricsRes, evRes, logRes] = await Promise.all([
                 fetch(`${API_BASE}/api/summary`),
                 fetch(`${API_BASE}/api/pods`),
                 fetch(`${API_BASE}/api/network-policies`),
@@ -57,6 +58,7 @@ function App() {
                 fetch(`${API_BASE}/api/trends`),
                 fetch(`${API_BASE}/api/compliance`),
                 fetch(`${API_BASE}/api/metrics`),
+                fetch(`${API_BASE}/api/events`),
                 fetch(`${API_BASE}/api/logs`)
             ])
 
@@ -71,6 +73,7 @@ function App() {
             setTrends(await trendsRes.json())
             setCompliance(await compRes.json())
             setMetrics(await metricsRes.json())
+            setEvents(await evRes.json())
             setLogs(await logRes.json())
         } catch (err) {
             console.error("Data fetch error:", err)
@@ -348,7 +351,7 @@ function App() {
             {/* Tabs */}
             <div className="tabs-container">
                 <div className="tabs-list">
-                    {['pods', 'policies', 'rbac', 'inventory', 'vulnerabilities', 'compliance', 'monitoring'].map(t => (
+                    {['pods', 'policies', 'rbac', 'inventory', 'vulnerabilities', 'compliance', 'monitoring', 'events'].map(t => (
                         <button key={t} onClick={() => { setActiveTab(t); if (t !== 'pods' && t !== 'inventory' && t !== 'vulnerabilities') setFilterNamespace(null) }} className={`tab-item ${activeTab === t ? 'active' : ''}`}>
                             {t.toUpperCase()}
                         </button>
@@ -518,6 +521,23 @@ function App() {
                                 </tbody>
                             </table>
                         </>
+                    ) : activeTab === 'events' ? (
+                        <table className="ent-table">
+                            <thead><tr><th>Time</th><th>Type</th><th>Reason</th><th>Object</th><th>Message</th><th>Count</th></tr></thead>
+                            <tbody>
+                                {events.filter(e => e.message.toLowerCase().includes(search.toLowerCase()) || e.object.toLowerCase().includes(search.toLowerCase())).map((e, idx) => (
+                                    <tr key={idx}>
+                                        <td style={{whiteSpace:'nowrap', fontSize:'0.8rem'}}>{e.time.split('.')[0].replace('T', ' ').replace('+00:00', '')}</td>
+                                        <td><div className={`severity-tag ${e.type === 'Warning' ? 'high' : 'low'}`}>{e.type}</div></td>
+                                        <td>{e.reason}</td>
+                                        <td><div className="asset-name">{e.object}</div><div className="asset-meta">{e.namespace}</div></td>
+                                        <td style={{fontSize:'0.85rem', color:'var(--text-secondary)'}}>{e.message}</td>
+                                        <td>{e.count}</td>
+                                    </tr>
+                                ))}
+                                {events.length === 0 && <tr><td colSpan="6" style={{textAlign:'center', padding:'2rem', color:'var(--text-secondary)'}}>No events detected.</td></tr>}
+                            </tbody>
+                        </table>
                     ) : (
                         <table className="ent-table">
                             <thead><tr><th>Resource</th><th>Status</th><th>Security Findings</th></tr></thead>
