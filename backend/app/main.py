@@ -97,6 +97,10 @@ async def get_metrics():
 async def get_events():
     return scanner.scan_events()
 
+@app.get("/api/secrets")
+async def get_secrets():
+    return scanner.scan_secrets()
+
 @app.post("/api/remediate")
 async def remediate(data: dict):
     return scanner.remediate_resource(

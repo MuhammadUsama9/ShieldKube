@@ -32,6 +32,7 @@ function App() {
     const [compliance, setCompliance] = useState([])
     const [metrics, setMetrics] = useState({ pods: [], nodes: [] })
     const [events, setEvents] = useState([])
+    const [secrets, setSecrets] = useState([])
     const [logs, setLogs] = useState([])
     const [loading, setLoading] = useState(true)
     const [activeTab, setActiveTab] = useState('pods')
@@ -46,7 +47,7 @@ function App() {
 
     const fetchData = async () => {
         try {
-            const [sumRes, podsRes, polRes, rbacRes, heatRes, radarRes, invRes, vulnRes, trendsRes, compRes, metricsRes, evRes, logRes] = await Promise.all([
+            const [sumRes, podsRes, polRes, rbacRes, heatRes, radarRes, invRes, vulnRes, trendsRes, compRes, metricsRes, evRes, secRes, logRes] = await Promise.all([
                 fetch(`${API_BASE}/api/summary`),
                 fetch(`${API_BASE}/api/pods`),
                 fetch(`${API_BASE}/api/network-policies`),
@@ -59,6 +60,7 @@ function App() {
                 fetch(`${API_BASE}/api/compliance`),
                 fetch(`${API_BASE}/api/metrics`),
                 fetch(`${API_BASE}/api/events`),
+                fetch(`${API_BASE}/api/secrets`),
                 fetch(`${API_BASE}/api/logs`)
             ])
 
@@ -74,6 +76,7 @@ function App() {
             setCompliance(await compRes.json())
             setMetrics(await metricsRes.json())
             setEvents(await evRes.json())
+            setSecrets(await secRes.json())
             setLogs(await logRes.json())
         } catch (err) {
             console.error("Data fetch error:", err)
@@ -182,6 +185,7 @@ function App() {
         else if (activeTab === 'rbac') data = rbac
         else if (activeTab === 'inventory') data = inventory.filter(i => i.group === activeSubTab)
         else if (activeTab === 'vulnerabilities') data = vulnerabilities[activeVulnTab] || []
+        else if (activeTab === 'secrets') data = secrets
 
         if (filterNamespace) {
             data = data.filter(item => item.namespace === filterNamespace || item.namespace === "Global" || item.namespace === "Cluster-wide")
@@ -351,8 +355,8 @@ function App() {
             {/* Tabs */}
             <div className="tabs-container">
                 <div className="tabs-list">
-                    {['pods', 'policies', 'rbac', 'inventory', 'vulnerabilities', 'compliance', 'monitoring', 'events'].map(t => (
-                        <button key={t} onClick={() => { setActiveTab(t); if (t !== 'pods' && t !== 'inventory' && t !== 'vulnerabilities') setFilterNamespace(null) }} className={`tab-item ${activeTab === t ? 'active' : ''}`}>
+                    {['pods', 'policies', 'rbac', 'inventory', 'vulnerabilities', 'compliance', 'monitoring', 'events', 'secrets'].map(t => (
+                        <button key={t} onClick={() => { setActiveTab(t); if (t !== 'pods' && t !== 'inventory' && t !== 'vulnerabilities' && t !== 'secrets') setFilterNamespace(null) }} className={`tab-item ${activeTab === t ? 'active' : ''}`}>
                             {t.toUpperCase()}
                         </button>
                     ))}
@@ -536,6 +540,26 @@ function App() {
                                     </tr>
                                 ))}
                                 {events.length === 0 && <tr><td colSpan="6" style={{textAlign:'center', padding:'2rem', color:'var(--text-secondary)'}}>No events detected.</td></tr>}
+                            </tbody>
+                        </table>
+                    ) : activeTab === 'secrets' ? (
+                        <table className="ent-table">
+                            <thead><tr><th>Entity</th><th>Kind</th><th>Keys Exposing Risk</th><th>Status</th></tr></thead>
+                            <tbody>
+                                {getFilteredData().map((s, idx) => (
+                                    <tr key={idx}>
+                                        <td><div className="asset-name">{s.name}</div><div className="asset-meta">{s.namespace}</div></td>
+                                        <td><span className="cis-tag">{s.kind}</span></td>
+                                        <td><div style={{fontSize:'0.8rem', color:'var(--text-secondary)', maxWidth:'200px', wordWrap:'break-word'}}>{s.keys.join(', ') || 'None'}</div></td>
+                                        <td>
+                                            {s.risks.length > 0 ? s.risks.map((risk, ridx) => (
+                                                <div key={ridx} className={`risk-pill`} style={{borderColor: risk.severity === 'Critical' ? 'var(--risk-critical)' : 'var(--risk-medium)'}}>
+                                                    <span className="risk-text" style={{color: risk.severity === 'Critical' ? 'var(--risk-critical)' : 'var(--risk-medium)'}}>{risk.type}</span>
+                                                </div>
+                                            )) : <span className="secure-text">✓ Verified</span>}
+                                        </td>
+                                    </tr>
+                                ))}
                             </tbody>
                         </table>
                     ) : (

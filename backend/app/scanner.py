@@ -283,7 +283,7 @@ class K8sScanner:
             events = self.v1.list_event_for_all_namespaces(_request_timeout=3).items
             # Sort by last timestamp if available
             def get_time(e):
-                return e.last_timestamp or e.event_time or e.metadata.creation_timestamp
+                return getattr(e, "last_timestamp", None) or getattr(e, "event_time", None) or getattr(e.metadata, "creation_timestamp", None)
             
             valid_events = [e for e in events if get_time(e)]
             valid_events.sort(key=get_time, reverse=True)
@@ -302,6 +302,60 @@ class K8sScanner:
         except Exception as e:
             self._log(f"Events Error: {e}", "error")
             return self._get_mock_events() if self.mock_mode else []
+
+    def scan_secrets(self) -> List[Dict[str, Any]]:
+        self._log("Auditing Secret and ConfigMap contents...")
+        if self.mock_mode: return self._get_mock_secrets()
+        try:
+            secrets = self.v1.list_secret_for_all_namespaces(_request_timeout=3).items
+            config_maps = self.v1.list_config_map_for_all_namespaces(_request_timeout=3).items
+            results = []
+            
+            for s in secrets:
+                if s.type in ("kubernetes.io/service-account-token", "kubernetes.io/tls", "kubernetes.io/dockerconfigjson"): continue
+                risks = []
+                # Check for weak or easily guessable secret names
+                if any(weak in s.metadata.name.lower() for weak in ["test", "demo", "dev", "default"]):
+                    risks.append({"type": "WeakNaming", "msg": f"Secret '{s.metadata.name}' has a weak or non-production naming convention.", "severity": "Medium"})
+                
+                results.append({
+                    "name": s.metadata.name,
+                    "namespace": s.metadata.namespace,
+                    "kind": "Secret",
+                    "keys": list(s.data.keys()) if s.data else [],
+                    "risks": risks,
+                    "severity": "High" if risks else "Low"
+                })
+
+            for cm in config_maps:
+                if cm.metadata.name.startswith("kube-"): continue
+                risks = []
+                # Scan configmap values for hardcoded secrets
+                if cm.data:
+                    for k, v in cm.data.items():
+                        if any(pat in k.lower() for pat in SECRET_PATTERNS) or any(pat in str(v).lower() for pat in ["bearer ", "eyjh", "password=", "api_key", "secret="]):
+                            risks.append({"type": "HardcodedSecret", "msg": f"ConfigMap contains potential hardcoded secret in key: {k}", "severity": "Critical"})
+                
+                results.append({
+                    "name": cm.metadata.name,
+                    "namespace": cm.metadata.namespace,
+                    "kind": "ConfigMap",
+                    "keys": list(cm.data.keys()) if cm.data else [],
+                    "risks": risks,
+                    "severity": "Critical" if risks else "Low"
+                })
+                
+            return results
+        except Exception as e:
+            self._log(f"Secrets Scan Error: {e}", "error")
+            return self._get_mock_secrets() if self.mock_mode else []
+
+    def _get_mock_secrets(self):
+        return [
+            {"name": "app-config", "namespace": "prod", "kind": "ConfigMap", "keys": ["DB_HOST", "DB_PASSWORD"], "severity": "Critical", "risks": [{"type": "HardcodedSecret", "msg": "ConfigMap contains potential hardcoded secret in key: DB_PASSWORD", "severity": "Critical"}]},
+            {"name": "test-api-token", "namespace": "dev", "kind": "Secret", "keys": ["token"], "severity": "Medium", "risks": [{"type": "WeakNaming", "msg": "Secret 'test-api-token' has a weak or non-production naming convention.", "severity": "Medium"}]},
+            {"name": "tls-certs", "namespace": "default", "kind": "Secret", "keys": ["tls.crt", "tls.key"], "severity": "Low", "risks": []}
+        ]
 
     def _get_mock_compliance(self):
         return [
