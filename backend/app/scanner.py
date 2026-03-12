@@ -229,7 +229,7 @@ class K8sScanner:
                 
                 if risks:
                     results.append({
-                        "name": role.metadata.name,
+                        "name": cr.metadata.name,
                         "namespace": "Cluster-wide",
                         "subjects": ["N/A"], # Could expand to list bindings
                         "risks": risks,
@@ -301,7 +301,7 @@ class K8sScanner:
             return res
         except Exception as e:
             self._log(f"Events Error: {e}", "error")
-            return self._get_mock_events() if self.mock_mode else []
+            return self._get_mock_events()
 
     def scan_secrets(self) -> List[Dict[str, Any]]:
         self._log("Auditing Secret and ConfigMap contents...")

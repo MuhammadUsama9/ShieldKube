@@ -27,7 +27,7 @@ function App() {
     const [heatmap, setHeatmap] = useState([])
     const [radarData, setRadarData] = useState([])
     const [inventory, setInventory] = useState([])
-    const [vulnerabilities, setVulnerabilities] = useState({ pods: [], nodes: [], volumes: [], replica_sets: [], deployments: [] })
+    const [vulnerabilities, setVulnerabilities] = useState({ pods: [], nodes: [], volumes: [], replica_sets: [], deployments: [], infrastructure: [] })
     const [trends, setTrends] = useState([])
     const [compliance, setCompliance] = useState([])
     const [metrics, setMetrics] = useState({ pods: [], nodes: [] })
