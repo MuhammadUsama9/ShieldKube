@@ -290,11 +290,11 @@ class K8sScanner:
             res = []
             for e in valid_events[:50]:
                 res.append({
-                    "reason": e.reason,
-                    "message": e.message,
-                    "type": e.type,
+                    "reason": e.reason or "Unknown",
+                    "message": e.message or "",
+                    "type": e.type or "Normal",
                     "object": f"{e.involved_object.kind}/{e.involved_object.name}" if e.involved_object else "Unknown",
-                    "namespace": e.involved_object.namespace if e.involved_object else "Unknown",
+                    "namespace": e.involved_object.namespace or "cluster" if e.involved_object else "cluster",
                     "count": e.count or 1,
                     "time": str(get_time(e))
                 })

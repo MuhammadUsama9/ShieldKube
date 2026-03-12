@@ -529,13 +529,13 @@ function App() {
                         <table className="ent-table">
                             <thead><tr><th>Time</th><th>Type</th><th>Reason</th><th>Object</th><th>Message</th><th>Count</th></tr></thead>
                             <tbody>
-                                {events.filter(e => e.message.toLowerCase().includes(search.toLowerCase()) || e.object.toLowerCase().includes(search.toLowerCase())).map((e, idx) => (
+                                {events.filter(e => (e.message || '').toLowerCase().includes(search.toLowerCase()) || (e.object || '').toLowerCase().includes(search.toLowerCase())).map((e, idx) => (
                                     <tr key={idx}>
-                                        <td style={{whiteSpace:'nowrap', fontSize:'0.8rem'}}>{e.time.split('.')[0].replace('T', ' ').replace('+00:00', '')}</td>
-                                        <td><div className={`severity-tag ${e.type === 'Warning' ? 'high' : 'low'}`}>{e.type}</div></td>
-                                        <td>{e.reason}</td>
-                                        <td><div className="asset-name">{e.object}</div><div className="asset-meta">{e.namespace}</div></td>
-                                        <td style={{fontSize:'0.85rem', color:'var(--text-secondary)'}}>{e.message}</td>
+                                        <td style={{whiteSpace:'nowrap', fontSize:'0.8rem'}}>{e.time ? e.time.split('.')[0].replace('T', ' ').replace('+00:00', '') : 'N/A'}</td>
+                                        <td><div className={`severity-tag ${e.type === 'Warning' ? 'high' : 'low'}`}>{e.type || 'Normal'}</div></td>
+                                        <td>{e.reason || '—'}</td>
+                                        <td><div className="asset-name">{e.object || 'Unknown'}</div><div className="asset-meta">{e.namespace}</div></td>
+                                        <td style={{fontSize:'0.85rem', color:'var(--text-secondary)'}}>{e.message || ''}</td>
                                         <td>{e.count}</td>
                                     </tr>
                                 ))}
