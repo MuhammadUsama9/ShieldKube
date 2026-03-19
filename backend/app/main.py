@@ -43,6 +43,15 @@ async def get_clusters():
         })
     return clusters
 
+@app.delete("/api/clusters/{cluster_id}")
+async def delete_cluster(cluster_id: str):
+    if cluster_id == "local":
+        return {"status": "error", "msg": "Cannot remove the local control plane cluster."}
+    if cluster_id in agent_data:
+        del agent_data[cluster_id]
+        return {"status": "success"}
+    return {"status": "error", "msg": "Cluster not found"}
+
 @app.post("/api/agent/v1/sync/{cluster_id}")
 async def sync_agent_data(cluster_id: str, payload: dict = Body(...)):
     if cluster_id not in agent_data:

@@ -159,6 +159,17 @@ function App() {
         }
     }
 
+    const handleRemoveCluster = async (id) => {
+        try {
+            await fetch(`${API_BASE}/api/clusters/${id}`, { method: 'DELETE' })
+            setNotification({ type: 'success', msg: 'Cluster disconnected remotely.' })
+            setActiveCluster('local')
+            fetchData()
+        } catch (err) {
+            setNotification({ type: 'error', msg: `Disconnect failed: ${err.message}` })
+        }
+    }
+
     useEffect(() => {
         fetchData()
         const interval = setInterval(fetchData, 8000)
@@ -241,22 +252,37 @@ function App() {
                             <h3>Connect Remote Cluster</h3>
                             <button className="close-btn" onClick={() => setShowAddCluster(false)}>✕</button>
                         </div>
-                        <div className="modal-body">
-                            <p>Run the command below on any machine that has <code>kubectl</code> access to the target cluster. The agent will auto-install and start sending security data back to ShieldKube.</p>
-                            <div style={{margin: '1rem 0'}}>
-                                <label style={{fontSize: '0.9rem', color: '#94a3b8', display: 'block', marginBottom: '0.5rem'}}>🌐 ShieldKube Public URL <span style={{color: '#ef4444'}}>*</span></label>
-                                <input type="text" value={publicUrl} onChange={(e) => setPublicUrl(e.target.value)} placeholder="e.g. http://203.0.113.5:8000" className="glass-select" style={{width: '100%', border: `1px solid ${publicUrl.trim() ? 'rgba(34,197,94,0.5)' : 'rgba(239,68,68,0.5)'}`}} />
-                                <p style={{fontSize: '0.78rem', color: '#64748b', marginTop: '0.3rem'}}>⚠️ Must be reachable from the remote cluster — <strong>not localhost</strong>.</p>
+                        {clusters.some(c => c.id === installClusterId) ? (
+                            <div className="modal-body" style={{textAlign: 'center', padding: '2rem 0'}}>
+                                <div style={{fontSize: '3rem', color: 'var(--accent-cyan)', marginBottom: '1rem'}}>✓</div>
+                                <h3 style={{margin: '0.5rem 0'}}>Agent Successfully Connected</h3>
+                                <p style={{color: 'var(--text-secondary)'}}>Secure telemetry stream established. ShieldKube is now ingesting environment metrics and vulnerability profiles.</p>
+                                <div className="modal-actions" style={{justifyContent: 'center', marginTop: '2rem'}}>
+                                    <button className="glass-button primary" onClick={() => { setShowAddCluster(false); setActiveCluster(installClusterId); }}>View Dashboard</button>
+                                </div>
                             </div>
-                            <div style={{margin: '1rem 0'}}>
-                                <label style={{fontSize: '0.9rem', color: '#94a3b8', display: 'block', marginBottom: '0.5rem'}}>Cluster Name:</label>
-                                <input type="text" value={newClusterName} onChange={(e) => setNewClusterName(e.target.value)} placeholder="e.g. AWS Production Ops" className="glass-select" style={{width: '100%'}} />
+                        ) : (
+                            <div className="modal-body">
+                                <p>Run the command below on any machine that has <code>kubectl</code> access to the target cluster. The agent will auto-install and start sending security data back to ShieldKube.</p>
+                                <div style={{margin: '1rem 0'}}>
+                                    <label style={{fontSize: '0.9rem', color: '#94a3b8', display: 'block', marginBottom: '0.5rem'}}>🌐 ShieldKube Public URL <span style={{color: '#ef4444'}}>*</span></label>
+                                    <input type="text" value={publicUrl} onChange={(e) => setPublicUrl(e.target.value)} placeholder="e.g. http://203.0.113.5:8000" className="glass-select" style={{width: '100%', border: `1px solid ${publicUrl.trim() ? 'rgba(34,197,94,0.5)' : 'rgba(239,68,68,0.5)'}`}} />
+                                    <p style={{fontSize: '0.78rem', color: '#64748b', marginTop: '0.3rem'}}>⚠️ Must be reachable from the remote cluster — <strong>not localhost</strong>.</p>
+                                </div>
+                                <div style={{margin: '1rem 0'}}>
+                                    <label style={{fontSize: '0.9rem', color: '#94a3b8', display: 'block', marginBottom: '0.5rem'}}>Cluster Name:</label>
+                                    <input type="text" value={newClusterName} onChange={(e) => setNewClusterName(e.target.value)} placeholder="e.g. AWS Production Ops" className="glass-select" style={{width: '100%'}} />
+                                </div>
+                                <div className="yaml-box" style={{marginTop: '1rem'}}><pre style={{whiteSpace: 'pre-wrap', wordBreak: 'break-all'}}>{generateInstallCommand()}</pre></div>
+                                <div className="modal-actions" style={{marginTop: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                    <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem'}}>
+                                        <span className="pulse-dot" style={{background: 'var(--accent-blue)', animationDuration: '2s'}}></span>
+                                        Awaiting connection setup...
+                                    </div>
+                                    <button className="glass-button primary" onClick={() => { navigator.clipboard.writeText(generateInstallCommand()); setNotification({type: 'success', msg: 'Command copied!'}); }}>Copy Command</button>
+                                </div>
                             </div>
-                            <div className="yaml-box" style={{marginTop: '1rem'}}><pre style={{whiteSpace: 'pre-wrap', wordBreak: 'break-all'}}>{generateInstallCommand()}</pre></div>
-                            <div className="modal-actions" style={{marginTop: '1.5rem'}}>
-                                <button className="glass-button primary" onClick={() => { navigator.clipboard.writeText(generateInstallCommand()); setNotification({type: 'success', msg: 'Command copied!'}); setShowAddCluster(false); }}>Copy Command</button>
-                            </div>
-                        </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -337,6 +363,9 @@ function App() {
                                 <select className="glass-select" value={activeCluster} onChange={e => { setActiveCluster(e.target.value); setLoading(true); }}>
                                     {clusters.map(c => <option key={c.id} value={c.id}>{c.name} {c.status === 'Offline' ? '(Offline)' : ''}</option>)}
                                 </select>
+                                {activeCluster !== 'local' && (
+                                    <button className="glass-button secondary" style={{color: 'var(--risk-crit)', borderColor: 'rgba(239, 68, 68, 0.3)'}} onClick={() => handleRemoveCluster(activeCluster)}>Disconnect</button>
+                                )}
                                 <button className="glass-button secondary" onClick={() => setShowAddCluster(true)}>＋ Add Cluster</button>
                             </>
                         )}
