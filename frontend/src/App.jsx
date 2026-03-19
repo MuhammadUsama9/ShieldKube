@@ -212,21 +212,24 @@ function App() {
     const renderModals = () => (
         <>
             {selectedFix && (
-                <div className="fix-modal-overlay" onClick={() => setSelectedFix(null)}>
-                    <div className="fix-modal glass-card" onClick={e => e.stopPropagation()}>
-                        <div className="modal-header">
-                            <h3>Remediation Blueprint</h3>
-                            <button className="close-btn" onClick={() => setSelectedFix(null)}>✕</button>
+                <div className="drawer-overlay" onClick={() => setSelectedFix(null)}>
+                    <div className="right-drawer" onClick={e => e.stopPropagation()}>
+                        <div className="drawer-header">
+                            <div>
+                                <h3>Remediation Blueprint</h3>
+                                <p>{selectedFix.target}</p>
+                            </div>
+                            <button className="drawer-close" onClick={() => setSelectedFix(null)}>×</button>
                         </div>
-                        <div className="modal-body">
-                            <p><strong>Intelligence:</strong> Apply this patch to resolve <b>{selectedFix.type || selectedFix.id}</b>.</p>
+                        <div className="drawer-body">
+                            <p style={{marginTop:0}}><strong>Intelligence:</strong> Apply this patch to resolve <b style={{color: 'var(--risk-crit)'}}>{selectedFix.type || selectedFix.id}</b>.</p>
                             <div className="yaml-box">
                                 <pre>{selectedFix.patch || `Remediation Plan:\n1. Pull patched image\n2. Update ${selectedFix.target} spec\n3. Roll out update`}</pre>
                             </div>
-                            <div className="modal-actions">
-                                <button className="glass-button secondary">Copy Patch</button>
-                                <button className="glass-button primary" onClick={() => handleRemediate(selectedFix)}>Execute Fix (Authorized)</button>
-                            </div>
+                        </div>
+                        <div className="drawer-footer">
+                            <button className="glass-button secondary">Copy Patch</button>
+                            <button className="glass-button primary" onClick={() => handleRemediate(selectedFix)}>Deploy Fix</button>
                         </div>
                     </div>
                 </div>
@@ -325,6 +328,7 @@ function App() {
                         {activeTab !== 'dashboard' && activeTab !== 'compliance' && activeTab !== 'monitoring' && (
                             <div className="search-wrapper">
                                 <input type="text" placeholder={`Search ${activeTab}...`} value={search} onChange={e => setSearch(e.target.value)} />
+                                <span className="search-hint">⌘K</span>
                             </div>
                         )}
                         
@@ -499,6 +503,33 @@ function App() {
                                                         <td>{n.memory}</td>
                                                         <td><div className={`severity-tag ${n.cpu_usage > 80 ? 'critical' : 'low'}`}>{n.cpu_usage}%</div></td>
                                                         <td><div className={`severity-tag ${n.mem_usage > 80 ? 'critical' : 'low'}`}>{n.mem_usage}%</div></td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+
+                                        <h4 style={{marginTop:'3rem', marginBottom:'1rem', fontSize:'0.85rem', color:'var(--text-secondary)', textTransform:'uppercase'}}>Active Pod Telemetry</h4>
+                                        <table className="ent-table">
+                                            <thead><tr><th>Pod Identity</th><th>Live CPU Utilization</th><th>Live Memory Utilization</th></tr></thead>
+                                            <tbody>
+                                                {metrics.pods.map((p, idx) => (
+                                                    <tr key={idx}>
+                                                        <td>
+                                                            <div className="asset-name" style={{fontSize: '0.9rem'}}>{p.name}</div>
+                                                            <div className="asset-meta"><span className="ns-pill">{p.namespace}</span></div>
+                                                        </td>
+                                                        <td>
+                                                            <div style={{display:'flex', alignItems:'center', gap:'0.75rem'}}>
+                                                                <span style={{fontFamily:'Outfit', fontWeight:700, width:'40px', fontSize:'0.9rem'}}>{p.cpu_usage}%</span>
+                                                                <div className="inline-gauge-container"><div className="inline-gauge-fill" style={{width: `${p.cpu_usage}%`, background: p.cpu_usage > 80 ? 'var(--risk-crit)' : 'var(--accent-cyan)'}}></div></div>
+                                                            </div>
+                                                        </td>
+                                                        <td>
+                                                            <div style={{display:'flex', alignItems:'center', gap:'0.75rem'}}>
+                                                                <span style={{fontFamily:'Outfit', fontWeight:700, width:'40px', fontSize:'0.9rem'}}>{p.mem_usage}%</span>
+                                                                <div className="inline-gauge-container"><div className="inline-gauge-fill" style={{width: `${p.mem_usage}%`, background: p.mem_usage > 80 ? 'var(--risk-crit)' : 'var(--accent-purple)'}}></div></div>
+                                                            </div>
+                                                        </td>
                                                     </tr>
                                                 ))}
                                             </tbody>
