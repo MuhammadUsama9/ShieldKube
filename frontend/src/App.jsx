@@ -20,6 +20,8 @@ const COLORS = {
 }
 
 function App() {
+    const [clusters, setClusters] = useState([])
+    const [activeCluster, setActiveCluster] = useState('local')
     const [summary, setSummary] = useState(null)
     const [pods, setPods] = useState([])
     const [policies, setPolicies] = useState([])
@@ -42,28 +44,38 @@ function App() {
     const [selectedFix, setSelectedFix] = useState(null)
     const [filterNamespace, setFilterNamespace] = useState(null)
     const [notification, setNotification] = useState(null)
+    const [showAddCluster, setShowAddCluster] = useState(false)
+    const [newClusterName, setNewClusterName] = useState('')
+    
+    const generateInstallCommand = () => {
+        const id = `cluster-${Math.random().toString(36).substring(2, 8)}`;
+        const name = encodeURIComponent(newClusterName || "Remote Cluster");
+        return `kubectl apply -f "${window.location.origin}/api/agent/install?cluster_id=${id}&cluster_name=${name}"`;
+    }
 
 
 
     const fetchData = async () => {
         try {
-            const [sumRes, podsRes, polRes, rbacRes, heatRes, radarRes, invRes, vulnRes, trendsRes, compRes, metricsRes, evRes, secRes, logRes] = await Promise.all([
-                fetch(`${API_BASE}/api/summary`),
-                fetch(`${API_BASE}/api/pods`),
-                fetch(`${API_BASE}/api/network-policies`),
-                fetch(`${API_BASE}/api/rbac`),
-                fetch(`${API_BASE}/api/heatmap`),
-                fetch(`${API_BASE}/api/radar`),
-                fetch(`${API_BASE}/api/inventory`),
-                fetch(`${API_BASE}/api/vulnerabilities`),
-                fetch(`${API_BASE}/api/trends`),
-                fetch(`${API_BASE}/api/compliance`),
-                fetch(`${API_BASE}/api/metrics`),
-                fetch(`${API_BASE}/api/events`),
-                fetch(`${API_BASE}/api/secrets`),
-                fetch(`${API_BASE}/api/logs`)
+            const [clusRes, sumRes, podsRes, polRes, rbacRes, heatRes, radarRes, invRes, vulnRes, trendsRes, compRes, metricsRes, evRes, secRes, logRes] = await Promise.all([
+                fetch(`${API_BASE}/api/clusters`),
+                fetch(`${API_BASE}/api/summary?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/pods?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/network-policies?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/rbac?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/heatmap?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/radar?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/inventory?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/vulnerabilities?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/trends?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/compliance?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/metrics?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/events?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/secrets?cluster_id=${activeCluster}`),
+                fetch(`${API_BASE}/api/logs?cluster_id=${activeCluster}`)
             ])
 
+            setClusters(await clusRes.json())
             setSummary(await sumRes.json())
             setPods(await podsRes.json())
             setPolicies(await polRes.json())
@@ -92,6 +104,7 @@ function App() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    cluster_id: activeCluster,
                     kind: target.kind || (activeTab === 'pods' ? 'Pod' : 'Deployment'),
                     name: target.name || target.target,
                     namespace: target.namespace || 'default',
@@ -164,7 +177,7 @@ function App() {
         fetchData()
         const interval = setInterval(fetchData, 8000)
         return () => clearInterval(interval)
-    }, [])
+    }, [activeCluster])
 
     const consoleRef = useRef(null)
 
@@ -255,6 +268,45 @@ function App() {
                 </div>
             )}
 
+            {/* Add Cluster Modal */}
+            {showAddCluster && (
+                <div className="fix-modal-overlay" onClick={() => setShowAddCluster(false)}>
+                    <div className="fix-modal glass-card" onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>Connect Remote Cluster</h3>
+                            <button className="close-btn" onClick={() => setShowAddCluster(false)}>✕</button>
+                        </div>
+                        <div className="modal-body">
+                            <p>To connect a remote Kubernetes cluster to ShieldKube, run the following command on a node configured with <code>kubectl</code> access to that cluster. This will automatically deploy the ShieldKube Agent.</p>
+                            
+                            <div style={{margin: '1rem 0'}}>
+                                <label style={{fontSize: '0.9rem', color: '#94a3b8', display: 'block', marginBottom: '0.5rem'}}>Cluster Name:</label>
+                                <input 
+                                    type="text" 
+                                    value={newClusterName} 
+                                    onChange={(e) => setNewClusterName(e.target.value)} 
+                                    placeholder="e.g. AWS Production Ops"
+                                    className="glass-select"
+                                    style={{width: '100%', padding: '0.6rem', border: '1px solid rgba(255,255,255,0.2)', color: 'white'}}
+                                />
+                            </div>
+
+                            <div className="yaml-box" style={{marginTop: '1rem', position: 'relative'}}>
+                                <pre style={{whiteSpace: 'pre-wrap', wordBreak: 'break-all'}}>{generateInstallCommand()}</pre>
+                            </div>
+                            
+                            <div className="modal-actions" style={{marginTop: '1.5rem'}}>
+                                <button className="glass-button primary" onClick={() => {
+                                    navigator.clipboard.writeText(generateInstallCommand());
+                                    setNotification({type: 'success', msg: 'Command copied to clipboard!'});
+                                    setShowAddCluster(false);
+                                }}>Copy Command</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Notification Toast */}
             {notification && (
                 <div className={`notification-toast ${notification.type}`}>
@@ -266,8 +318,35 @@ function App() {
             {/* Header */}
             <header className="enterprise-header">
                 <div className="header-branding">
-                    <h1>Guardian Enterprise <span className="version-tag">v7.2</span></h1>
+                    <h1>ShieldKube Enterprise <span className="version-tag">v7.2</span></h1>
                     <div className="status-badge"><span className="pulse-dot"></span> Full-Spectrum Defense Active</div>
+                    
+                    {clusters.length > 0 && (
+                        <div className="cluster-selector" style={{marginLeft: '2rem', display: 'flex', alignItems: 'center', gap: '10px'}}>
+                            <select 
+                                className="glass-select" 
+                                value={activeCluster} 
+                                onChange={e => {
+                                    setActiveCluster(e.target.value);
+                                    setLoading(true);
+                                }}
+                                style={{padding: '0.4rem', borderRadius: '4px', background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.2)'}}
+                            >
+                                {clusters.map(c => (
+                                    <option key={c.id} value={c.id} style={{color: 'black'}}>
+                                        {c.name} {c.status === 'Offline' ? '(Offline)' : ''}
+                                    </option>
+                                ))}
+                            </select>
+                            <button 
+                                className="glass-button primary" 
+                                style={{padding: '0.4rem 0.8rem', fontSize: '0.8rem'}}
+                                onClick={() => setShowAddCluster(true)}
+                            >
+                                ＋ Add Cluster
+                            </button>
+                        </div>
+                    )}
                 </div>
 
                 {summary && (
