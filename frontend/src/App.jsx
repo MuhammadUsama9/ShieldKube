@@ -46,11 +46,13 @@ function App() {
     const [notification, setNotification] = useState(null)
     const [showAddCluster, setShowAddCluster] = useState(false)
     const [newClusterName, setNewClusterName] = useState('')
+    const [publicUrl, setPublicUrl] = useState('')
+    const [installClusterId] = useState(`cluster-${Math.random().toString(36).substring(2, 8)}`)
     
     const generateInstallCommand = () => {
-        const id = `cluster-${Math.random().toString(36).substring(2, 8)}`;
-        const name = encodeURIComponent(newClusterName || "Remote Cluster");
-        return `kubectl apply -f "${window.location.origin}/api/agent/install?cluster_id=${id}&cluster_name=${name}"`;
+        const baseUrl = publicUrl.trim() || window.location.origin;
+        const name = encodeURIComponent(newClusterName.trim() || "Remote Cluster");
+        return `kubectl apply -f "${baseUrl}/api/agent/install?cluster_id=${installClusterId}&cluster_name=${name}"`;
     }
 
 
@@ -277,8 +279,25 @@ function App() {
                             <button className="close-btn" onClick={() => setShowAddCluster(false)}>✕</button>
                         </div>
                         <div className="modal-body">
-                            <p>To connect a remote Kubernetes cluster to ShieldKube, run the following command on a node configured with <code>kubectl</code> access to that cluster. This will automatically deploy the ShieldKube Agent.</p>
-                            
+                            <p>Run the command below on any machine that has <code>kubectl</code> access to the target cluster. The agent will auto-install and start sending security data back to ShieldKube.</p>
+
+                            <div style={{margin: '1rem 0'}}>
+                                <label style={{fontSize: '0.9rem', color: '#94a3b8', display: 'block', marginBottom: '0.5rem'}}>
+                                    🌐 ShieldKube Public URL <span style={{color: '#ef4444'}}>*</span>
+                                </label>
+                                <input 
+                                    type="text" 
+                                    value={publicUrl} 
+                                    onChange={(e) => setPublicUrl(e.target.value)} 
+                                    placeholder="e.g. http://203.0.113.5:8000 or https://shieldkube.company.com"
+                                    className="glass-select"
+                                    style={{width: '100%', padding: '0.6rem', border: `1px solid ${publicUrl.trim() ? 'rgba(34,197,94,0.5)' : 'rgba(239,68,68,0.5)'}`, color: 'white'}}
+                                />
+                                <p style={{fontSize: '0.78rem', color: '#64748b', marginTop: '0.3rem'}}>
+                                    ⚠️ Must be reachable from the remote cluster — <strong>not localhost</strong>. This is the IP/hostname of this ShieldKube server.
+                                </p>
+                            </div>
+
                             <div style={{margin: '1rem 0'}}>
                                 <label style={{fontSize: '0.9rem', color: '#94a3b8', display: 'block', marginBottom: '0.5rem'}}>Cluster Name:</label>
                                 <input 

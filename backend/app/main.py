@@ -43,7 +43,7 @@ async def get_clusters():
         })
     return clusters
 
-@app.get("/api/agent/v1/sync/{cluster_id}")
+@app.post("/api/agent/v1/sync/{cluster_id}")
 async def sync_agent_data(cluster_id: str, payload: dict = Body(...)):
     if cluster_id not in agent_data:
         agent_data[cluster_id] = {"name": payload.get("cluster_name", f"Cluster {cluster_id}")}
