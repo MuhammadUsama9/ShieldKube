@@ -83,8 +83,8 @@ kind: ClusterRole
 metadata:
   name: shieldkube-agent-role
 rules:
-- apiGroups: ["", "apps", "networking.k8s.io", "rbac.authorization.k8s.io", "policy", "metrics.k8s.io", "batch"]
-  resources: ["pods", "nodes", "services", "configmaps", "secrets", "namespaces", "events", "deployments", "replicasets", "networkpolicies", "clusterroles", "resourcequotas", "limitranges", "poddisruptionbudgets", "jobs", "cronjobs", "daemonsets", "statefulsets"]
+- apiGroups: ["", "apps", "networking.k8s.io", "rbac.authorization.k8s.io", "policy", "metrics.k8s.io"]
+  resources: ["pods", "nodes", "services", "configmaps", "secrets", "namespaces", "events", "deployments", "replicasets", "networkpolicies", "clusterroles", "resourcequotas", "limitranges", "poddisruptionbudgets"]
   verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -116,23 +116,12 @@ spec:
         app: shieldkube-agent
     spec:
       serviceAccountName: shieldkube-agent-sa
-      hostPID: true
       containers:
       - name: agent
-        image: public.ecr.aws/docker/library/golang:1.21-alpine
+        image: public.ecr.aws/docker/library/python:3.11-slim
         command: ["/bin/sh", "-c"]
         args:
-        - >
-          apk add --no-cache git curl tar bash jq &&
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.49.1 &&
-          curl -L https://github.com/aquasecurity/kube-bench/releases/download/v0.6.17/kube-bench_0.6.17_linux_amd64.tar.gz -o kube-bench.tar.gz &&
-          tar -xvf kube-bench.tar.gz && mv kube-bench /usr/local/bin/ && rm kube-bench.tar.gz &&
-          git clone https://github.com/MuhammadUsama9/ShieldKube.git /shieldkube &&
-          cd /shieldkube/backend-go &&
-          go mod init shieldkube-go &&
-          go get k8s.io/client-go@v0.29.2 k8s.io/api@v0.29.2 k8s.io/apimachinery@v0.29.2 &&
-          go mod tidy &&
-          go run main.go
+        - "apt-get update && apt-get install -y wget && pip install requests kubernetes schedule && mkdir -p app && wget -q https://raw.githubusercontent.com/MuhammadUsama9/ShieldKube/main/backend/agent.py -O agent.py && wget -q https://raw.githubusercontent.com/MuhammadUsama9/ShieldKube/main/backend/app/scanner.py -O app/scanner.py && touch app/__init__.py && python agent.py"
         env:
         - name: SHIELDKUBE_URL
           value: "{base_url}"
@@ -142,74 +131,15 @@ spec:
           value: "{cluster_name}"
         - name: SYNC_INTERVAL_SEC
           value: "60"
-        volumeMounts:
-        - name: var-lib-etcd
-          mountPath: /var/lib/etcd
-          readOnly: true
-        - name: var-lib-kubelet
-          mountPath: /var/lib/kubelet
-          readOnly: true
-        - name: var-lib-kube-scheduler
-          mountPath: /var/lib/kube-scheduler
-          readOnly: true
-        - name: var-lib-kube-controller-manager
-          mountPath: /var/lib/kube-controller-manager
-          readOnly: true
-        - name: etc-systemd
-          mountPath: /etc/systemd
-          readOnly: true
-        - name: lib-systemd
-          mountPath: /lib/systemd
-          readOnly: true
-        - name: srv-kubernetes
-          mountPath: /srv/kubernetes
-          readOnly: true
-        - name: etc-kubernetes
-          mountPath: /etc/kubernetes
-          readOnly: true
-        - name: usr-bin
-          mountPath: /usr/local/mount-from-host/bin
-          readOnly: true
-        - name: etc-cni-netd
-          mountPath: /etc/cni/net.d/
-          readOnly: true
-        - name: opt-cni-bin
-          mountPath: /opt/cni/bin/
-          readOnly: true
-      volumes:
-      - name: var-lib-etcd
-        hostPath:
-          path: "/var/lib/etcd"
-      - name: var-lib-kubelet
-        hostPath:
-          path: "/var/lib/kubelet"
-      - name: var-lib-kube-scheduler
-        hostPath:
-          path: "/var/lib/kube-scheduler"
-      - name: var-lib-kube-controller-manager
-        hostPath:
-          path: "/var/lib/kube-controller-manager"
-      - name: etc-systemd
-        hostPath:
-          path: "/etc/systemd"
-      - name: lib-systemd
-        hostPath:
-          path: "/lib/systemd"
-      - name: srv-kubernetes
-        hostPath:
-          path: "/srv/kubernetes"
-      - name: etc-kubernetes
-        hostPath:
-          path: "/etc/kubernetes"
-      - name: usr-bin
-        hostPath:
-          path: "/usr/bin"
-      - name: etc-cni-netd
-        hostPath:
-          path: "/etc/cni/net.d/"
-      - name: opt-cni-bin
-        hostPath:
-          path: "/opt/cni/bin/"
+        - name: MOCK_MODE
+          value: "false"
+        resources:
+          limits:
+            cpu: "250m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
 """
     return yaml_script.strip()
 
