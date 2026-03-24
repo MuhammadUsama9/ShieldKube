@@ -6,7 +6,7 @@ import {
     LineChart, Line
 } from 'recharts'
 
-const API_BASE = "http://localhost:8000"
+const API_BASE = `${window.location.protocol}//${window.location.hostname}:8000`
 const COLORS = {
     Runtime: '#ef4444',
     IAM: '#f97316',
@@ -55,48 +55,59 @@ function App() {
     const generateInstallCommand = () => {
         const baseUrl = publicUrl.trim() || window.location.origin;
         const name = encodeURIComponent(newClusterName.trim() || "Remote Cluster");
-        return `kubectl apply -f "${baseUrl}/api/agent/install?cluster_id=${installClusterId}&cluster_name=${name}"`;
+        return `kubectl apply -f "${baseUrl}/api/agent/install?cluster_id=${installClusterId}&cluster_name=${name}&base_url=${encodeURIComponent(baseUrl)}"`;
     }
 
-    const fetchData = async () => {
-        try {
-            const [clusRes, sumRes, podsRes, polRes, rbacRes, heatRes, radarRes, invRes, vulnRes, trendsRes, compRes, metricsRes, evRes, secRes, logRes] = await Promise.all([
-                fetch(`${API_BASE}/api/clusters`),
-                fetch(`${API_BASE}/api/summary?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/pods?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/network-policies?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/rbac?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/heatmap?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/radar?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/inventory?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/vulnerabilities?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/trends?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/compliance?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/metrics?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/events?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/secrets?cluster_id=${activeCluster}`),
-                fetch(`${API_BASE}/api/logs?cluster_id=${activeCluster}`)
-            ])
+    const [error, setError] = useState(null);
 
-            setClusters(await clusRes.json())
-            setSummary(await sumRes.json())
-            setPods(await podsRes.json())
-            setPolicies(await polRes.json())
-            setRbac(await rbacRes.json())
-            setHeatmap(await heatRes.json())
-            setRadarData(await radarRes.json())
-            setInventory(await invRes.json())
-            setVulnerabilities(await vulnRes.json())
-            setTrends(await trendsRes.json())
-            setCompliance(await compRes.json())
-            setMetrics(await metricsRes.json())
-            setEvents(await evRes.json())
-            setSecrets(await secRes.json())
-            setLogs(await logRes.json())
+    const fetchData = async () => {
+        setLoading(true);
+        setError(null);
+        
+        const fetchResource = async (path, setter, defaultValue) => {
+            try {
+                const response = await fetch(`${API_BASE}${path}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                setter(data);
+            } catch (err) {
+                console.error(`Error fetching ${path}:`, err);
+                if (defaultValue !== undefined) setter(defaultValue);
+            }
+        };
+
+        try {
+            // Priority 1: Bootstrap critical data in one go
+            const bootResponse = await fetch(`${API_BASE}/api/dashboard/bootstrap/${activeCluster}`);
+            if (bootResponse.ok) {
+                const bootData = await bootResponse.json();
+                setClusters(bootData.clusters || []);
+                setSummary(bootData.summary);
+                setPods(bootData.pods || []);
+                setVulnerabilities(bootData.vulnerabilities || { pods: [], nodes: [], volumes: [], replica_sets: [], deployments: [], infrastructure: [] });
+                setRadarData(bootData.radar || []);
+            } else {
+                throw new Error(`Bootstrap failed: ${bootResponse.statusText}`);
+            }
+
+            // Priority 2: Non-blocking supplemental data (Fire and forget)
+            Promise.all([
+                fetchResource(`/api/network-policies?cluster_id=${activeCluster}`, setPolicies, []),
+                fetchResource(`/api/rbac?cluster_id=${activeCluster}`, setRbac, []),
+                fetchResource(`/api/heatmap?cluster_id=${activeCluster}`, setHeatmap, []),
+                fetchResource(`/api/inventory?cluster_id=${activeCluster}`, setInventory, []),
+                fetchResource(`/api/trends?cluster_id=${activeCluster}`, setTrends, []),
+                fetchResource(`/api/compliance?cluster_id=${activeCluster}`, setCompliance, []),
+                fetchResource(`/api/metrics?cluster_id=${activeCluster}`, setMetrics, { pods: [], nodes: [] }),
+                fetchResource(`/api/events?cluster_id=${activeCluster}`, setEvents, []),
+                fetchResource(`/api/secrets?cluster_id=${activeCluster}`, setSecrets, []),
+                fetchResource(`/api/logs?cluster_id=${activeCluster}`, setLogs, [])
+            ]);
         } catch (err) {
-            console.error("Data fetch error:", err)
+            console.error("Critical fetch error:", err);
+            setError(err.message || "Network Error: Could not connect to ShieldKube Backend.");
         } finally {
-            setLoading(false)
+            setLoading(false);
         }
     }
 
@@ -176,6 +187,26 @@ function App() {
         return () => clearInterval(interval)
     }, [activeCluster])
 
+    // UI Components
+    const SeverityBadge = ({ level }) => {
+        const lv = level?.toLowerCase() || 'low';
+        return <span className={`severity-tag ${lv}`}>{level || 'Low'}</span>;
+    };
+
+    const StatusBadge = ({ pods }) => {
+        const hasCritical = pods.some(p => p.severity === 'Critical');
+        const hasHigh = pods.some(p => p.severity === 'High');
+        if (hasCritical) return <div className="status-badge" style={{color: 'var(--risk-crit)', background: 'rgba(244,63,94,0.1)', borderColor: 'rgba(244,63,94,0.2)'}}><span className="pulse-dot" style={{background: 'var(--risk-crit)'}}></span>Action Required</div>;
+        if (hasHigh) return <div className="status-badge" style={{color: 'var(--risk-high)', background: 'rgba(251,146,60,0.1)', borderColor: 'rgba(251,146,60,0.2)'}}><span className="pulse-dot" style={{background: 'var(--risk-high)'}}></span>Attention Needed</div>;
+        return <div className="status-badge"><span className="pulse-dot"></span>System Healthy</div>;
+    };
+
+    const MiniGauge = ({ val, color }) => (
+        <div className="inline-gauge-container">
+            <div className="inline-gauge-fill" style={{ width: `${val}%`, background: color }}></div>
+        </div>
+    );
+
     const consoleRef = useRef(null)
     useEffect(() => {
         if (!loading && logs.length > 0 && consoleRef.current) {
@@ -218,7 +249,31 @@ function App() {
         return priorities.slice(0, 4)
     }
 
-    if (loading && !summary) return <div style={{display:'flex', alignItems:'center', justifyContent:'center', height:'100vh'}}><h1>Calibrating Kube Engine...</h1></div>
+    if (loading && !summary) {
+        return (
+            <div style={{display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100vh', background:'#0f172a', color:'white', fontFamily:'sans-serif'}}>
+                <div style={{fontSize:'2rem', fontWeight:'bold', marginBottom:'20px', animation:'pulse 2s infinite'}}>ShieldKube Enterprise</div>
+                <div style={{fontSize:'1.2rem', color:'#94a3b8'}}>Calibrating Kube Engine...</div>
+                
+                {error && (
+                    <div style={{marginTop:'40px', padding:'20px', background:'#1e293b', borderRadius:'10px', border:'1px solid #334155', maxWidth:'500px', textAlign:'center'}}>
+                        <div style={{color:'#f87171', marginBottom:'20px', fontWeight:'bold'}}>Connectivity Issue Detected</div>
+                        <div style={{color:'#94a3b8', fontSize:'0.9rem', marginBottom:'30px'}}>{error}</div>
+                        <div style={{display:'flex', gap:'15px', justifyContent:'center'}}>
+                            <button onClick={fetchData} style={{padding:'10px 20px', background:'#3b82f6', border:'none', borderRadius:'6px', color:'white', cursor:'pointer', fontWeight:'bold'}}>Retry Connection</button>
+                            <button onClick={() => {
+                                setSummary({
+                                    total_pods: 0, total_policies: 0, total_rbac: 0, total_vulnerabilities: 0, total_risks: 0, 
+                                    security_score: 100, severity_distribution: { Critical: 0, High: 0, Medium: 0, Low: 0 }
+                                });
+                                setLoading(false);
+                            }} style={{padding:'10px 20px', background:'#475569', border:'none', borderRadius:'6px', color:'white', cursor:'pointer'}}>Launch Simulation</button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        )
+    }
 
     const renderModals = () => (
         <>
@@ -252,13 +307,17 @@ function App() {
                             <h3>Connect Remote Cluster</h3>
                             <button className="close-btn" onClick={() => setShowAddCluster(false)}>✕</button>
                         </div>
-                        {clusters.some(c => c.id === installClusterId) ? (
+                        {clusters.some(c => c.id === installClusterId || (c.id.startsWith('cluster-') && !c.is_local)) ? (
                             <div className="modal-body" style={{textAlign: 'center', padding: '2rem 0'}}>
                                 <div style={{fontSize: '3rem', color: 'var(--accent-cyan)', marginBottom: '1rem'}}>✓</div>
                                 <h3 style={{margin: '0.5rem 0'}}>Agent Successfully Connected</h3>
                                 <p style={{color: 'var(--text-secondary)'}}>Secure telemetry stream established. ShieldKube is now ingesting environment metrics and vulnerability profiles.</p>
                                 <div className="modal-actions" style={{justifyContent: 'center', marginTop: '2rem'}}>
-                                    <button className="glass-button primary" onClick={() => { setShowAddCluster(false); setActiveCluster(installClusterId); }}>View Dashboard</button>
+                                    <button className="glass-button primary" onClick={() => { 
+                                        const cid = clusters.find(c => c.id === installClusterId || (c.id.startsWith('cluster-') && !c.is_local))?.id;
+                                        if (cid) setActiveCluster(cid);
+                                        setShowAddCluster(false); 
+                                    }}>View Dashboard</button>
                                 </div>
                             </div>
                         ) : (
@@ -340,12 +399,12 @@ function App() {
                 {/* Horizontal Top Bar */}
                 <header className="top-bar">
                     <div className="flex-gap">
-                        <div className="page-title">{activeTab.replace('_', ' ')}</div>
-                        <div className="status-badge"><span className="pulse-dot"></span> Defense Active</div>
+                        <div className="page-title" style={{background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontSize: '1.75rem'}}>{activeTab.replace('_', ' ')}</div>
+                        <StatusBadge pods={pods} />
                     </div>
                     
                     <div className="flex-gap">
-                        {['pods', 'inventory', 'vulnerabilities'].includes(activeTab) && (
+                        {['pods', 'inventory', 'vulnerabilities', 'secrets'].includes(activeTab) && (
                             <select className="glass-select" value={filterNamespace || ""} onChange={(e) => setFilterNamespace(e.target.value || null)}>
                                 <option value="">All Namespaces</option>
                                 {namespaces.map(ns => <option key={ns} value={ns}>{ns}</option>)}
@@ -353,20 +412,23 @@ function App() {
                         )}
                         {activeTab !== 'dashboard' && activeTab !== 'compliance' && activeTab !== 'monitoring' && (
                             <div className="search-wrapper">
-                                <input type="text" placeholder={`Search ${activeTab}...`} value={search} onChange={e => setSearch(e.target.value)} />
+                                <span style={{position:'absolute', left:'0.75rem', opacity:0.5}}>🔍</span>
+                                <input type="text" placeholder={`Search ${activeTab}...`} value={search} onChange={e => setSearch(e.target.value)} style={{paddingLeft: '2.2rem'}} />
                                 <span className="search-hint">⌘K</span>
                             </div>
                         )}
                         
+                        <div style={{height: '24px', width: '1px', background: 'var(--border-subtle)', margin: '0 0.5rem'}}></div>
+
                         {clusters.length > 0 && (
                             <>
-                                <select className="glass-select" value={activeCluster} onChange={e => { setActiveCluster(e.target.value); setLoading(true); }}>
-                                    {clusters.map(c => <option key={c.id} value={c.id}>{c.name} {c.status === 'Offline' ? '(Offline)' : ''}</option>)}
+                                <select className="glass-select" value={activeCluster} onChange={e => { setActiveCluster(e.target.value); setLoading(true); }} style={{borderColor: clusters.find(c => c.id === activeCluster)?.status === 'Offline' ? 'var(--risk-crit)' : 'var(--border-subtle)'}}>
+                                    {clusters.map(c => <option key={c.id} value={c.id}>{c.status === 'Offline' ? '⚠ ' : '◍ '}{c.name}</option>)}
                                 </select>
                                 {activeCluster !== 'local' && (
-                                    <button className="glass-button secondary" style={{color: 'var(--risk-crit)', borderColor: 'rgba(239, 68, 68, 0.3)'}} onClick={() => handleRemoveCluster(activeCluster)}>Disconnect</button>
+                                    <button className="glass-button secondary" style={{color: 'var(--risk-crit)', border: '1px solid rgba(244, 63, 94, 0.2)'}} onClick={() => handleRemoveCluster(activeCluster)}>Disconnect</button>
                                 )}
-                                <button className="glass-button secondary" onClick={() => setShowAddCluster(true)}>＋ Add Cluster</button>
+                                <button className="glass-button primary" onClick={() => setShowAddCluster(true)}>＋ Add Cluster</button>
                             </>
                         )}
                     </div>
@@ -380,21 +442,31 @@ function App() {
                             {/* Hero Card */}
                             <div className="global-posture-card glass-card">
                                 <div className="hero-left">
-                                    <svg viewBox="0 0 120 120" className="circular-chart">
-                                        <g transform="translate(60,60)">
-                                            <circle r="50" className="circle-bg" />
-                                            <circle r="50" className="circle" strokeDasharray={circumference} strokeDashoffset={strokeDashoffset} stroke={getScoreColor(summary.security_score)} transform="rotate(-90)" />
-                                            <text x="0" y="5" className="percentage">{summary.security_score}%</text>
-                                        </g>
-                                    </svg>
+                                    <div className="circular-chart-container" style={{position: 'relative', width: '120px', height: '120px'}}>
+                                        <svg viewBox="0 0 120 120" className="circular-chart">
+                                            <g transform="translate(60,60)">
+                                                <circle r="50" className="circle-bg" />
+                                                <circle r="50" className="circle" 
+                                                    strokeDasharray={circumference} 
+                                                    strokeDashoffset={strokeDashoffset} 
+                                                    stroke={summary.security_score > 80 ? 'var(--risk-low)' : summary.security_score > 50 ? 'var(--risk-med)' : 'var(--risk-crit)'} 
+                                                    transform="rotate(-90)" 
+                                                />
+                                                <text x="0" y="5" className="percentage" style={{fontSize: '24px'}}>{summary.security_score}%</text>
+                                            </g>
+                                        </svg>
+                                    </div>
                                     <div className="hero-text">
-                                        <h2>Global Posture Rating</h2>
-                                        <p>Cluster identity and isolation integrity.</p>
+                                        <h2>{summary.security_score > 80 ? 'Optimal Security' : summary.security_score > 50 ? 'Moderate Posture' : 'High Risk'}</h2>
+                                        <p>Global Security Health Index for <strong>{clusters.find(c => c.id === activeCluster)?.name}</strong></p>
                                     </div>
                                 </div>
-                                <div className="flex-gap">
-                                    <button className="glass-button secondary" onClick={handleExport}>⭳ Export Report</button>
-                                    <button className="glass-button primary" onClick={() => setActiveTab('vulnerabilities')}>Start Remediation</button>
+                                <div className="hero-right" style={{textAlign: 'right'}}>
+                                    <div style={{fontSize: '0.7rem', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.1em'}}>Current Cluster</div>
+                                    <div style={{fontSize: '1.25rem', fontWeight: 800, fontFamily: 'Outfit'}}>{clusters.find(c => c.id === activeCluster)?.name}</div>
+                                    <div style={{fontSize: '0.75rem', marginTop: '0.4rem', color: clusters.find(c => c.id === activeCluster)?.status === 'Offline' ? 'var(--risk-crit)' : 'var(--risk-low)'}}>
+                                        {clusters.find(c => c.id === activeCluster)?.status === 'Offline' ? '● Disconnected' : '● Live Sync Active'}
+                                    </div>
                                 </div>
                             </div>
 
@@ -602,10 +674,23 @@ function App() {
                                             <tbody>
                                                 {getFilteredData().map((v, idx) => (
                                                     <tr key={idx}>
-                                                        <td><div className="asset-name">{v.target}</div><div className="asset-meta">{v.image || 'Infrastructure'}</div></td>
-                                                        <td><span className="v-tag" style={{fontFamily:'Fira Code, monospace', color:'var(--accent-cyan)'}}>{v.id || v.cve_id}</span></td>
-                                                        <td><div className={`severity-tag ${v.severity.toLowerCase()}`}>{v.severity}</div></td>
-                                                        <td><button className="fix-btn" onClick={() => setSelectedFix(v)}>Remediate</button></td>
+                                                        <td>
+                                                            <div className="asset-name">{v.target}</div>
+                                                            <div className="asset-meta">{v.image || 'Infrastructure'}</div>
+                                                        </td>
+                                                        <td>
+                                                            <span className="v-tag" style={{fontFamily:'Fira Code, monospace', color:'var(--accent-cyan)', fontWeight: 700}}>
+                                                                {v.id || v.cve_id}
+                                                            </span>
+                                                        </td>
+                                                        <td>
+                                                            <SeverityBadge level={v.severity} />
+                                                        </td>
+                                                        <td>
+                                                            <button className="glass-button secondary" style={{fontSize: '0.75rem', padding: '0.3rem 0.8rem'}} onClick={() => setSelectedFix(v)}>
+                                                               Remediate
+                                                            </button>
+                                                        </td>
                                                     </tr>
                                                 ))}
                                             </tbody>
@@ -658,16 +743,33 @@ function App() {
                                         <tbody>
                                             {getFilteredData().map((item, idx) => (
                                                 <tr key={idx}>
-                                                    <td><div className="asset-name">{item.name}</div><div className="asset-meta">{item.namespace}</div></td>
-                                                    <td><div className={`severity-tag ${item.severity?.toLowerCase() || 'low'}`}>{item.severity || 'Secure'}</div></td>
                                                     <td>
-                                                        {item.risks?.map((risk, ridx) => (
-                                                            <div key={ridx} className="risk-pill" onClick={() => setSelectedFix(risk)}>
-                                                                <span className="cis-code">{risk.cis}</span>
-                                                                <span className="risk-text">{risk.type}</span>
-                                                            </div>
-                                                        ))}
-                                                        {(!item.risks || item.risks.length === 0) && <span className="severity-tag low" style={{background:'transparent', padding:0}}>✓ Secure Posture</span>}
+                                                        <div className="asset-name">{item.name}</div>
+                                                        <div className="asset-meta">
+                                                            <span className="ns-pill">{item.namespace}</span>
+                                                            {item.kind && <span style={{opacity: 0.6}}> • {item.kind}</span>}
+                                                        </div>
+                                                    </td>
+                                                    <td style={{minWidth: '140px'}}>
+                                                        <SeverityBadge level={item.severity} />
+                                                        {item.severity && item.severity !== 'Secure' && (
+                                                           <MiniGauge val={item.severity === 'Critical' ? 100 : item.severity === 'High' ? 75 : item.severity === 'Medium' ? 50 : 25} color={COLORS[item.severity]} />
+                                                        )}
+                                                    </td>
+                                                    <td>
+                                                        <div style={{display: 'flex', flexWrap: 'wrap', gap: '6px'}}>
+                                                           {item.risks?.map((risk, ridx) => (
+                                                               <div key={ridx} className="risk-pill" onClick={() => setSelectedFix(risk)}>
+                                                                   <span className="cis-code">{risk.cis}</span>
+                                                                   <span className="risk-text">{risk.type}</span>
+                                                               </div>
+                                                           ))}
+                                                           {(!item.risks || item.risks.length === 0) && (
+                                                               <div style={{color: 'var(--risk-low)', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px', opacity: 0.8}}>
+                                                                   <span style={{fontSize: '1.1rem'}}>✓</span> Secure Posture Baseline
+                                                               </div>
+                                                           )}
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             ))}

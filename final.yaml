@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shieldkube-agent
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shieldkube-agent-sa
+  namespace: shieldkube-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shieldkube-agent-role
+rules:
+- apiGroups: ["", "apps", "networking.k8s.io", "rbac.authorization.k8s.io", "policy", "metrics.k8s.io", "batch"]
+  resources: ["pods", "nodes", "services", "configmaps", "secrets", "namespaces", "events", "deployments", "replicasets", "networkpolicies", "clusterroles", "resourcequotas", "limitranges", "poddisruptionbudgets", "jobs", "cronjobs"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shieldkube-agent-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: shieldkube-agent-role
+subjects:
+- kind: ServiceAccount
+  name: shieldkube-agent-sa
+  namespace: shieldkube-agent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shieldkube-agent
+  namespace: shieldkube-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shieldkube-agent
+  template:
+    metadata:
+      labels:
+        app: shieldkube-agent
+    spec:
+      serviceAccountName: shieldkube-agent-sa
+      containers:
+      - name: agent
+        image: mcr.microsoft.com/mirror/docker/library/python:3.11-slim
+        command: ["/bin/sh", "-c"]
+        args:
+        - "apt-get update && apt-get install -y wget && pip install requests kubernetes schedule && mkdir -p app && wget -q http://host.minikube.internal:8000/api/agent/agent.py -O agent.py && wget -q http://host.minikube.internal:8000/api/agent/app/scanner.py -O app/scanner.py && touch app/__init__.py && python -u agent.py"
+        env:
+        - name: SHIELDKUBE_URL
+          value: "http://host.minikube.internal:8000"
+        - name: CLUSTER_ID
+          value: "final-verified"
+        - name: CLUSTER_NAME
+          value: "FinalVerified"
+        - name: SYNC_INTERVAL_SEC
+          value: "60"
+        - name: MOCK_MODE
+          value: "false"
+        resources:
+          limits:
+            cpu: "250m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"

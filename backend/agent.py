@@ -5,11 +5,44 @@ import schedule
 from app.scanner import K8sScanner
 
 # Configuration from Environment Variables
-SHIELDKUBE_URL = os.getenv("SHIELDKUBE_URL", "http://host.minikube.internal:8000") # Default for local testing
+SHIELDKUBE_URL = os.getenv("SHIELDKUBE_URL", "http://host.minikube.internal:8000")
+# Fix possible slash collapsing
+if SHIELDKUBE_URL.startswith("http:/") and not SHIELDKUBE_URL.startswith("http://"):
+    SHIELDKUBE_URL = SHIELDKUBE_URL.replace("http:/", "http://", 1)
+elif SHIELDKUBE_URL.startswith("https:/") and not SHIELDKUBE_URL.startswith("https://"):
+    SHIELDKUBE_URL = SHIELDKUBE_URL.replace("https:/", "https://", 1)
+SHIELDKUBE_URL = SHIELDKUBE_URL.rstrip("/")
+
 CLUSTER_ID = os.getenv("CLUSTER_ID", "agent-cluster-1")
 CLUSTER_NAME = os.getenv("CLUSTER_NAME", "Remote K8s Cluster")
 SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL_SEC", "60"))
 MOCK_MODE = os.getenv("MOCK_MODE", "false").lower() == "true"
+# Enterprise Auth
+AGENT_API_KEY = os.getenv("SHIELDKUBE_API_KEY", "shieldkube-default-key-2024")
+
+def sync_with_retry(url, payload, max_retries=5):
+    """Sync data to backend with exponential backoff retry logic."""
+    headers = {"X-API-KEY": AGENT_API_KEY}
+    backoff = 2
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=15)
+            if response.status_code == 200:
+                print(f"[{time.strftime('%H:%M:%S')}] Sync Successful (Attempt {attempt + 1})")
+                return True
+            elif response.status_code == 401:
+                print(f"[{time.strftime('%H:%M:%S')}] Auth Failed: Invalid API Key")
+                return False
+            else:
+                print(f"[{time.strftime('%H:%M:%S')}] Sync Failed (Status {response.status_code})")
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] Connection Error: {e}")
+        
+        if attempt < max_retries - 1:
+            print(f"Retrying in {backoff} seconds...")
+            time.sleep(backoff)
+            backoff *= 2
+    return False
 
 def run_scan_and_sync():
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Starting cluster scan for {CLUSTER_ID}...")
@@ -62,19 +95,22 @@ def run_scan_and_sync():
             "logs": scanner.get_logs()
         }
 
-        # Push to API
+        # Push to API with enterprise retry logic
         sync_url = f"{SHIELDKUBE_URL}/api/agent/v1/sync/{CLUSTER_ID}"
         print(f"Pushing {len(str(payload))} bytes of payload to {sync_url}...")
         
-        response = requests.post(sync_url, json=payload, timeout=10)
+        success = sync_with_retry(sync_url, payload)
         
-        if response.status_code == 200:
+        if success:
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Successfully synced to main backend.")
         else:
-            print(f"Failed to sync. Server returned status code {response.status_code}")
+            print(f"Failed to sync after multiple attempts.")
             
     except Exception as e:
-        print(f"Error during scan and sync: {e}")
+        sync_url = f"{SHIELDKUBE_URL}/api/agent/v1/sync/{CLUSTER_ID}"
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] CRITICAL: Scan/Sync failed.")
+        print(f"Error: {e}")
+        print(f"Verify that the backend is reachable at: {sync_url}")
 
 if __name__ == "__main__":
     print(f"ShieldKube Agent starting up...")

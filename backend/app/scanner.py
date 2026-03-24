@@ -3,23 +3,60 @@ import re
 import time
 import random
 from kubernetes import client, config
-from typing import List, Dict, Any
+import requests
+from typing import List, Dict, Any, Union
 from collections import defaultdict
 
 TRUSTED_REGISTRIES = ["gcr.io", "quay.io", "docker.io/library"]
 SECRET_PATTERNS = ["key", "pass", "token", "secret", "auth", "pwd"]
 
+# Expanded CVE Database for common container images
 CVE_DB = {
     "nginx": [
         {"id": "CVE-2023-44487", "severity": "Critical", "title": "HTTP/2 Rapid Reset Attack", "fixed_in": "1.25.3"},
-        {"id": "CVE-2021-23017", "severity": "High", "title": "Resolver buffer overflow", "fixed_in": "1.21.0"}
+        {"id": "CVE-2021-23017", "severity": "High", "title": "Resolver buffer overflow", "fixed_in": "1.21.0"},
+        {"id": "CVE-2022-41741", "severity": "Medium", "title": "Memory corruption in ngx_http_mp4_module", "fixed_in": "1.23.2"},
+        {"id": "CVE-2022-41742", "severity": "Medium", "title": "Memory disclosure in ngx_http_mp4_module", "fixed_in": "1.23.2"}
     ],
     "redis": [
-        {"id": "CVE-2023-41056", "severity": "High", "title": "Integer overflow", "fixed_in": "7.2.1"},
-        {"id": "CVE-2022-24736", "severity": "Medium", "title": "Lua script execution", "fixed_in": "6.2.7"}
+        {"id": "CVE-2023-41056", "severity": "High", "title": "Integer overflow in Redis", "fixed_in": "7.0.13"},
+        {"id": "CVE-2023-28856", "severity": "High", "title": "Authenticated users can trigger panic", "fixed_in": "7.0.11"},
+        {"id": "CVE-2022-24736", "severity": "Medium", "title": "Lua script execution in Redis", "fixed_in": "6.2.7"},
+        {"id": "CVE-2022-35977", "severity": "Medium", "title": "Integer overflow in SETRANGE", "fixed_in": "7.0.5"}
     ],
-    "alpine": [{"id": "CVE-2022-30065", "severity": "Medium", "title": "Busybox use-after-free", "fixed_in": "3.16.0"}],
-    "python": [{"id": "CVE-2023-24329", "severity": "High", "title": "URL parsing bypass", "fixed_in": "3.11.2"}]
+    "postgres": [
+        {"id": "CVE-2023-5868", "severity": "Medium", "title": "Memory disclosure in aggregate function", "fixed_in": "16.1"},
+        {"id": "CVE-2023-5869", "severity": "High", "title": "Buffer overflow in integer aggregation", "fixed_in": "16.1"},
+        {"id": "CVE-2022-1552", "severity": "High", "title": "Privilege escalation via Autovacuum", "fixed_in": "14.3"}
+    ],
+    "mysql": [
+        {"id": "CVE-2023-21963", "severity": "Medium", "title": "Vulnerability in Server: Optimizer", "fixed_in": "8.0.33"},
+        {"id": "CVE-2023-21912", "severity": "Medium", "title": "Vulnerability in Server: Encryption", "fixed_in": "8.0.32"}
+    ],
+    "node": [
+        {"id": "CVE-2023-32002", "severity": "High", "title": "Module loading bypass", "fixed_in": "20.5.0"},
+        {"id": "CVE-2023-32559", "severity": "Medium", "title": "Privilege escalation via policy", "fixed_in": "18.16.1"},
+        {"id": "CVE-2022-32212", "severity": "High", "title": "HTTP Request Smuggling", "fixed_in": "18.5.0"}
+    ],
+    "python": [
+        {"id": "CVE-2023-24329", "severity": "High", "title": "URL parsing bypass", "fixed_in": "3.11.2"},
+        {"id": "CVE-2022-45061", "severity": "Medium", "title": "CPU-based DoS in IDNA encoding", "fixed_in": "3.11.1"},
+        {"id": "CVE-2023-40217", "severity": "Medium", "title": "SSL handshake bypass", "fixed_in": "3.11.5"}
+    ],
+    "alpine": [
+        {"id": "CVE-2022-30065", "severity": "Medium", "title": "Busybox use-after-free", "fixed_in": "3.16.0"},
+        {"id": "CVE-2023-5363", "severity": "High", "title": "OpenSSL vulnerability", "fixed_in": "3.1.4"}
+    ],
+    "ubuntu": [
+        {"id": "CVE-2023-32629", "severity": "High", "title": "OverlayFS local privilege escalation", "fixed_in": "23.04"},
+        {"id": "CVE-2023-31248", "severity": "High", "title": "Netfilter vulnerability", "fixed_in": "23.04"}
+    ],
+    "debian": [
+        {"id": "CVE-2023-4911", "severity": "Critical", "title": "Looney Tunables glibc overflow", "fixed_in": "12.2"}
+    ],
+    "busybox": [
+        {"id": "CVE-2022-28391", "severity": "Medium", "title": "Buffer overflow in netstat", "fixed_in": "1.35.0"}
+    ]
 }
 
 class K8sScanner:
@@ -28,7 +65,14 @@ class K8sScanner:
         self.scan_logs = []
         if not self.mock_mode:
             try:
-                config.load_kube_config()
+                # Try in-cluster first, then local config
+                try:
+                    config.load_incluster_config()
+                    self._log("ShieldKube Engine: Connected via In-Cluster context.")
+                except:
+                    config.load_kube_config()
+                    self._log("ShieldKube Engine: Connected via Kube-Config context.")
+                
                 self.v1 = client.CoreV1Api()
                 self.apps_v1 = client.AppsV1Api()
                 self.networking_v1 = client.NetworkingV1Api()
@@ -36,8 +80,13 @@ class K8sScanner:
                 self.policy_v1 = client.PolicyV1Api()
                 self._log("ShieldKube Engine v1.0 (Live Audit) Initialized.")
             except Exception as e:
-                self._log(f"Init Error: {e}", "error")
-                self.mock_mode = True
+                self._log(f"Connection Error: {e}", "error")
+                if self.mock_mode: # Only fall back if explicitly allowed or during dev
+                    self._log("Falling back to MOCK MODE due to connection failure.")
+                else:
+                    # In production we might still want to avoid crashing the whole app, 
+                    # but we shouldn't show fake data without warning.
+                    self._log("Live Kubernetes connection failed. Dashboard will be empty until resolved.", "error")
 
     def _log(self, msg: str, level: str = "info"):
         self.scan_logs.append({"timestamp": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
@@ -89,7 +138,9 @@ class K8sScanner:
             for c in cms: inv.append({"kind": "ConfigMap", "name": c.metadata.name, "namespace": c.metadata.namespace, "group": "Configuration"})
             
             return inv
-        except Exception: return self._get_mock_inventory()
+        except Exception as e:
+            self._log(f"Inventory scan error: {e}. Showing mock inventory.", "error")
+            return self._get_mock_inventory()
 
     def scan_vulnerabilities(self) -> Dict[str, List[Dict[str, Any]]]:
         self._log("Running workload-centric CVE audit...")
@@ -162,12 +213,65 @@ class K8sScanner:
 
             return results
         except Exception as e:
-            self._log(f"Deep scan error: {e}", "error")
+            self._log(f"Deep scan error: {e}. Falling back to simulations.", "error")
             return self._get_mock_deep_vulnerabilities()
 
     def _check_image_cve(self, image: str) -> List[Dict]:
-        base = image.split('/')[-1].split(':')[0]
-        return CVE_DB.get(base, [])
+        """
+        Check for vulnerabilities using a hybrid approach:
+        1. Local high-performance CVE database for common base images.
+        2. Real-time OSV.dev API lookup for specific version tags.
+        """
+        parts = image.split('/')[-1].split(':')
+        base = parts[0]
+        tag = parts[1] if len(parts) > 1 else "latest"
+        
+        # 1. Local Database Lookup (Fast)
+        vulns = CVE_DB.get(base, []) .copy()
+        
+        # 2. Dynamic OSV.dev Lookup (if specific version tag is present and NOT in mock_mode)
+        if not self.mock_mode and tag not in ["latest", "stable", "main", "master"]:
+            osv_vulns = self._check_osv_api(base, tag)
+            # Avoid duplicates if tagging matches static DB entries
+            existing_ids = {v["id"] for v in vulns}
+            for ov in osv_vulns:
+                if ov["id"] not in existing_ids:
+                    vulns.append(ov)
+        
+        return vulns
+
+    def _check_osv_api(self, package: str, version: str) -> List[Dict]:
+        """Query OSV.dev API for version-specific vulnerabilities."""
+        try:
+            # OSV supports multiple ecosystems. For container base images, 
+            # we check common ones like PyPI, npm, or Debian/Alpine if detectable.
+            # This is a simplified integration for the ShieldKube dashboard.
+            pkg_data: Dict[str, str] = {"name": package}
+            
+            # Add ecosystem hints based on package name
+            if package in ["python", "django", "flask"]: pkg_data["ecosystem"] = "PyPI"
+            elif package in ["node", "express", "react"]: pkg_data["ecosystem"] = "npm"
+            
+            payload = {
+                "version": version,
+                "package": pkg_data
+            }
+            
+            resp = requests.post("https://api.osv.dev/v1/query", json=payload, timeout=2)
+            if resp.status_code == 200:
+                data = resp.json()
+                results = []
+                for v in data.get("vulns", []):
+                    results.append({
+                        "id": v.get("id"),
+                        "severity": v.get("database_specific", {}).get("severity", "Medium"),
+                        "title": v.get("summary", "No summary provided"),
+                        "fixed_in": "Refer to OSV"
+                    })
+                return results
+        except Exception:
+            pass # Suppress API errors to avoid breaking the scan
+        return []
 
     def scan_pods(self) -> List[Dict]:
         if self.mock_mode: return self._get_mock_pods()
@@ -178,7 +282,9 @@ class K8sScanner:
                 risks = self._analyze_pod_security(p)
                 res.append({"name": p.metadata.name, "namespace": p.metadata.namespace, "risks": risks, "severity": self._calculate_severity(risks)})
             return res
-        except Exception: return self._get_mock_pods()
+        except Exception as e:
+            self._log(f"Pod scan error: {e}. Falling back to simulations.", "error")
+            return self._get_mock_pods()
 
     def scan_network_policies(self) -> List[Dict[str, Any]]:
         self._log("Auditing Network Isolation policies...")

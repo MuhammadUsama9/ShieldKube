@@ -1,0 +1,143 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shieldkube-agent
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shieldkube-agent-sa
+  namespace: shieldkube-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shieldkube-agent-role
+rules:
+- apiGroups: ["", "apps", "networking.k8s.io", "rbac.authorization.k8s.io", "policy", "metrics.k8s.io", "batch"]
+  resources: ["pods", "nodes", "services", "configmaps", "secrets", "namespaces", "events", "deployments", "replicasets", "networkpolicies", "clusterroles", "resourcequotas", "limitranges", "poddisruptionbudgets", "jobs", "cronjobs", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shieldkube-agent-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: shieldkube-agent-role
+subjects:
+- kind: ServiceAccount
+  name: shieldkube-agent-sa
+  namespace: shieldkube-agent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shieldkube-agent
+  namespace: shieldkube-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shieldkube-agent
+  template:
+    metadata:
+      labels:
+        app: shieldkube-agent
+    spec:
+      serviceAccountName: shieldkube-agent-sa
+      hostPID: true
+      containers:
+      - name: agent
+        image: public.ecr.aws/docker/library/golang:1.21-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+        - >
+          apk add --no-cache git curl tar bash jq &&
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.49.1 &&
+          curl -L https://github.com/aquasecurity/kube-bench/releases/download/v0.6.17/kube-bench_0.6.17_linux_amd64.tar.gz -o kube-bench.tar.gz &&
+          tar -xvf kube-bench.tar.gz && mv kube-bench /usr/local/bin/ && rm kube-bench.tar.gz &&
+          git clone https://github.com/MuhammadUsama9/ShieldKube.git /shieldkube &&
+          cd /shieldkube/backend-go &&
+          go mod init shieldkube-go &&
+          go get k8s.io/client-go@v0.29.2 k8s.io/api@v0.29.2 k8s.io/apimachinery@v0.29.2 &&
+          go mod tidy &&
+          go run main.go
+        env:
+        - name: SHIELDKUBE_URL
+          value: "http://host.minikube.internal:8000"
+        - name: CLUSTER_ID
+          value: "testcluster"
+        - name: CLUSTER_NAME
+          value: "Testing"
+        - name: SYNC_INTERVAL_SEC
+          value: "60"
+        volumeMounts:
+        - name: var-lib-etcd
+          mountPath: /var/lib/etcd
+          readOnly: true
+        - name: var-lib-kubelet
+          mountPath: /var/lib/kubelet
+          readOnly: true
+        - name: var-lib-kube-scheduler
+          mountPath: /var/lib/kube-scheduler
+          readOnly: true
+        - name: var-lib-kube-controller-manager
+          mountPath: /var/lib/kube-controller-manager
+          readOnly: true
+        - name: etc-systemd
+          mountPath: /etc/systemd
+          readOnly: true
+        - name: lib-systemd
+          mountPath: /lib/systemd
+          readOnly: true
+        - name: srv-kubernetes
+          mountPath: /srv/kubernetes
+          readOnly: true
+        - name: etc-kubernetes
+          mountPath: /etc/kubernetes
+          readOnly: true
+        - name: usr-bin
+          mountPath: /usr/local/mount-from-host/bin
+          readOnly: true
+        - name: etc-cni-netd
+          mountPath: /etc/cni/net.d/
+          readOnly: true
+        - name: opt-cni-bin
+          mountPath: /opt/cni/bin/
+          readOnly: true
+      volumes:
+      - name: var-lib-etcd
+        hostPath:
+          path: "/var/lib/etcd"
+      - name: var-lib-kubelet
+        hostPath:
+          path: "/var/lib/kubelet"
+      - name: var-lib-kube-scheduler
+        hostPath:
+          path: "/var/lib/kube-scheduler"
+      - name: var-lib-kube-controller-manager
+        hostPath:
+          path: "/var/lib/kube-controller-manager"
+      - name: etc-systemd
+        hostPath:
+          path: "/etc/systemd"
+      - name: lib-systemd
+        hostPath:
+          path: "/lib/systemd"
+      - name: srv-kubernetes
+        hostPath:
+          path: "/srv/kubernetes"
+      - name: etc-kubernetes
+        hostPath:
+          path: "/etc/kubernetes"
+      - name: usr-bin
+        hostPath:
+          path: "/usr/bin"
+      - name: etc-cni-netd
+        hostPath:
+          path: "/etc/cni/net.d/"
+      - name: opt-cni-bin
+        hostPath:
+          path: "/opt/cni/bin/"

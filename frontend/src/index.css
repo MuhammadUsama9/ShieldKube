@@ -1,23 +1,25 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap');
 
 :root {
-  --bg-main: #000000;
-  --bg-card: #09090b;
-  --bg-elevated: #18181b;
-  --border-subtle: #27272a;
-  --border-focus: #3f3f46;
+  --bg-main: #020617; /* Deep midnight blue */
+  --bg-card: rgba(15, 23, 42, 0.4); /* Translucent slate */
+  --bg-elevated: rgba(30, 41, 59, 0.6);
+  --border-subtle: rgba(255, 255, 255, 0.1);
+  --border-focus: rgba(99, 102, 241, 0.4);
   
   --text-primary: #f8fafc;
-  --text-secondary: #a1a1aa;
+  --text-secondary: #94a3b8;
   
-  --accent-cyan: #06b6d4;
-  --accent-blue: #3b82f6;
-  --accent-purple: #8b5cf6;
+  --accent-cyan: #22d3ee;
+  --accent-blue: #6366f1; /* More vibrant Indigo */
+  --accent-purple: #a855f7;
 
-  --risk-crit: #ef4444;
-  --risk-high: #f97316;
-  --risk-med: #eab308;
-  --risk-low: #10b981;
+  --risk-crit: #f43f5e;
+  --risk-high: #fb923c;
+  --risk-med: #fbbf24;
+  --risk-low: #34d399;
+  
+  --glass-blur: blur(12px);
 }
 
 * { box-sizing: border-box; }
@@ -27,10 +29,9 @@ body {
   font-family: 'Inter', sans-serif;
   background-color: var(--bg-main);
   color: var(--text-primary);
-  /* Extremely subtle, premium background glow */
   background-image: 
-    radial-gradient(circle at 15% 0%, rgba(59, 130, 246, 0.08), transparent 30%),
-    radial-gradient(circle at 85% 100%, rgba(139, 92, 246, 0.08), transparent 40%);
+    radial-gradient(circle at 0% 0%, rgba(99, 102, 241, 0.1) 0%, transparent 40%),
+    radial-gradient(circle at 100% 100%, rgba(168, 85, 247, 0.1) 0%, transparent 40%);
   background-attachment: fixed;
   overflow: hidden;
 }
@@ -196,13 +197,14 @@ h1, h2, h3, h4, h5 { font-family: 'Outfit', sans-serif; margin: 0; letter-spacin
 
 .glass-card {
   background: var(--bg-card);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--border-subtle);
-  border-radius: 1rem;
+  border-radius: 1.25rem;
   padding: 1.5rem;
-  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s, box-shadow 0.3s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
-  overflow: hidden;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
 }
 
 .glass-card:hover {
