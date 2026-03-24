@@ -177,10 +177,9 @@ spec:
       serviceAccountName: shieldkube-agent-sa
       containers:
       - name: agent
-        image: mcr.microsoft.com/mirror/docker/library/python:3.11-slim
-        command: ["/bin/sh", "-c"]
-        args:
-        - "apt-get update && apt-get install -y wget && pip install requests kubernetes schedule && mkdir -p app && wget -q {base_url}/api/agent/agent.py -O agent.py && wget -q {base_url}/api/agent/app/scanner.py -O app/scanner.py && touch app/__init__.py && python -u agent.py"
+        # Use pre-built agent image for enterprise stability
+        image: shieldkube-agent:latest
+        imagePullPolicy: IfNotPresent
         env:
         - name: SHIELDKUBE_URL
           value: "{base_url}"
