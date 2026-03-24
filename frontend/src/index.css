@@ -813,3 +813,133 @@ h1, h2, h3, h4, h5 { font-family: 'Outfit', sans-serif; margin: 0; letter-spacin
 .priority-item.high { border-left-color: var(--risk-high); }
 .priority-meta { display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.75rem; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; }
 .priority-label { font-size: 0.9rem; font-weight: 600; }
+
+/* Security Command Center - Advanced Visuals */
+
+.network-topology-container {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    background: radial-gradient(circle at center, #0f172a 0%, #020617 100%);
+    overflow: hidden;
+}
+
+.topology-node {
+    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    cursor: pointer;
+}
+
+.topology-node:hover {
+    filter: drop-shadow(0 0 8px currentColor);
+}
+
+.topology-edge {
+    stroke-opacity: 0.3;
+    transition: all 0.3s ease;
+}
+
+.topology-edge:hover {
+    stroke-opacity: 0.8;
+    stroke-width: 3;
+}
+
+.rbac-tree-container {
+    padding: 2rem;
+    background: #000;
+    min-height: 500px;
+}
+
+.rbac-node-pill {
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-elevated);
+    font-size: 0.85rem;
+    font-family: 'Fira Code', monospace;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.advisory-item {
+    margin-bottom: 2rem;
+    border-left: 4px solid var(--accent-blue);
+    padding-left: 1.5rem;
+    background: rgba(255,255,255,0.01);
+}
+
+.advisory-item.critical { border-left-color: var(--risk-crit); }
+.advisory-item.high { border-left-color: var(--risk-high); }
+
+.adv-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.remediation-step {
+    background: #000;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    margin-top: 1rem;
+    overflow: hidden;
+}
+
+.step-header {
+    background: var(--bg-elevated);
+    padding: 0.5rem 1rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    display: flex;
+    justify-content: space-between;
+}
+
+.step-code {
+    padding: 1rem;
+    font-family: 'Fira Code', monospace;
+    font-size: 0.8rem;
+    color: var(--accent-cyan);
+    white-space: pre-wrap;
+}
+
+/* Compliance Pulse */
+.compliance-score-ring {
+    stroke-dasharray: 283;
+    stroke-dashoffset: 283;
+    transition: stroke-dashoffset 1s ease-in-out;
+}
+
+.risk-summary-strip {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.risk-mini-stat {
+    flex: 1;
+    text-align: center;
+    padding: 0.75rem;
+    background: rgba(0,0,0,0.2);
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+}
+
+.risk-mini-stat .val {
+    font-size: 1.25rem;
+    font-weight: 800;
+    display: block;
+}
+
+.risk-mini-stat .lbl {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.notification-toast.success .toast-icon { background: var(--risk-low); }
+.notification-toast.warning .toast-icon { background: var(--risk-high); }
+.notification-toast.error .toast-icon { background: var(--risk-crit); }

@@ -22,8 +22,16 @@ services:
     build: ./agent
     image: shieldkube-agent:latest
     network_mode: host
-    profiles: ["tools"] # Don't start by default, just for building/testing
+    profiles: ["tools"]
     environment:
       - SHIELDKUBE_URL=http://localhost:8000
       - CLUSTER_ID=local-agent-test
       - SHIELDKUBE_API_KEY=shieldkube-default-key-2024
+
+  backend-go:
+    build: ./backend-go
+    container_name: shieldkube-go-engine
+    network_mode: host
+    environment:
+      - SHIELDKUBE_URL=http://localhost:8000
+      - CLUSTER_ID=local-go-deep-scan

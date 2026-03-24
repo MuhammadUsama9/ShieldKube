@@ -40,6 +40,22 @@ function App() {
     
     // New UX: Dashboard as default home view
     const [activeTab, setActiveTab] = useState('dashboard')
+    const [topology, setTopology] = useState({ nodes: [], links: [] })
+    const [rbacGraph, setRbacGraph] = useState({ nodes: [], links: [] })
+    const [advisories, setAdvisories] = useState([])
+
+    const sidebarItems = [
+        { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+        { id: 'inventory', label: 'Inventory', icon: '📦' },
+        { id: 'vulnerabilities', label: 'Vulnerabilities', icon: '🛡️' },
+        { id: 'compliance', label: 'Compliance', icon: '📋' },
+        { id: 'network', label: 'Network Map', icon: '🕸️' },
+        { id: 'rbac', label: 'RBAC Vision', icon: '🕸️' },
+        { id: 'advisories', label: 'Advisories', icon: '💡' },
+        { id: 'monitoring', label: 'Monitoring', icon: '📈' },
+        { id: 'events', label: 'Events', icon: '🔔' },
+        { id: 'agent', label: 'Agent Install', icon: '🚀' }
+    ]
     const [activeSubTab, setActiveSubTab] = useState('Workloads') 
     const [activeVulnTab, setActiveVulnTab] = useState('pods') 
     const [search, setSearch] = useState('')
@@ -101,7 +117,10 @@ function App() {
                 fetchResource(`/api/metrics?cluster_id=${activeCluster}`, setMetrics, { pods: [], nodes: [] }),
                 fetchResource(`/api/events?cluster_id=${activeCluster}`, setEvents, []),
                 fetchResource(`/api/secrets?cluster_id=${activeCluster}`, setSecrets, []),
-                fetchResource(`/api/logs?cluster_id=${activeCluster}`, setLogs, [])
+                fetchResource(`/api/logs?cluster_id=${activeCluster}`, setLogs, []),
+                fetchResource(`/api/topology?cluster_id=${activeCluster}`, setTopology, { nodes: [], links: [] }),
+                fetchResource(`/api/rbac/graph?cluster_id=${activeCluster}`, setRbacGraph, { nodes: [], links: [] }),
+                fetchResource(`/api/advisories?cluster_id=${activeCluster}`, setAdvisories, [])
             ]);
         } catch (err) {
             console.error("Critical fetch error:", err);
@@ -273,7 +292,270 @@ function App() {
                 )}
             </div>
         )
-    }
+    }    const renderMonitoring = () => (
+        <div className="monitoring-view">
+            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '2rem'}}>
+                <div className="glass-card metric-card" style={{background: 'rgba(255,255,255,0.02)'}}>
+                    <h4 style={{marginBottom:'1rem', fontSize:'0.85rem', color:'var(--text-secondary)', textTransform:'uppercase'}}>Node Utilization</h4>
+                    <ResponsiveContainer width="100%" height={220}>
+                        <BarChart data={metrics.nodes}>
+                            <XAxis dataKey="name" stroke="#64748b" fontSize={10} />
+                            <YAxis unit="%" stroke="#64748b" fontSize={10} />
+                            <ReTooltip contentStyle={{ background: '#09090b', border: '1px solid #27272a', borderRadius:'8px' }} />
+                            <Bar dataKey="cpu_usage" fill="#0ea5e9" name="CPU Usage %" radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="mem_usage" fill="#8b5cf6" name="Mem Usage %" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
+                <div className="glass-card metric-card" style={{background: 'rgba(255,255,255,0.02)'}}>
+                    <h4 style={{marginBottom:'1rem', fontSize:'0.85rem', color:'var(--text-secondary)', textTransform:'uppercase'}}>Pod CPU Distribution</h4>
+                    <ResponsiveContainer width="100%" height={220}>
+                        <PieChart>
+                            <Pie data={metrics.pods} dataKey="cpu_usage" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5}>
+                                {metrics.pods.map((_, index) => <Cell key={index} fill={index % 2 === 0 ? '#0ea5e9' : '#8b5cf6'} />)}
+                            </Pie>
+                            <ReTooltip contentStyle={{ background: '#09090b', border: '1px solid #27272a', borderRadius:'8px' }} />
+                        </PieChart>
+                    </ResponsiveContainer>
+                </div>
+            </div>
+            
+            <table className="ent-table">
+                <thead><tr><th>Node</th><th>CPU Scale</th><th>Memory Scale</th><th>CPU Usage</th><th>Mem Usage</th></tr></thead>
+                <tbody>
+                    {metrics.nodes.map((n, idx) => (
+                        <tr key={idx}>
+                            <td><div className="asset-name">{n.name}</div></td>
+                            <td>{n.cpu}</td>
+                            <td>{n.memory}</td>
+                            <td><div className={`severity-tag ${n.cpu_usage > 80 ? 'critical' : 'low'}`}>{n.cpu_usage}%</div></td>
+                            <td><div className={`severity-tag ${n.mem_usage > 80 ? 'critical' : 'low'}`}>{n.mem_usage}%</div></td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+
+            <h4 style={{marginTop:'3rem', marginBottom:'1rem', fontSize:'0.85rem', color:'var(--text-secondary)', textTransform:'uppercase'}}>Active Pod Telemetry</h4>
+            <table className="ent-table">
+                <thead><tr><th>Pod Identity</th><th>Live CPU Utilization</th><th>Live Memory Utilization</th></tr></thead>
+                <tbody>
+                    {metrics.pods.map((p, idx) => (
+                        <tr key={idx}>
+                            <td>
+                                <div className="asset-name" style={{fontSize: '0.9rem'}}>{p.name}</div>
+                                <div className="asset-meta"><span className="ns-pill">{p.namespace}</span></div>
+                            </td>
+                            <td>
+                                <div style={{display:'flex', alignItems:'center', gap:'0.75rem'}}>
+                                    <span style={{fontFamily:'Outfit', fontWeight:700, width:'40px', fontSize:'0.9rem'}}>{p.cpu_usage}%</span>
+                                    <div className="inline-gauge-container"><div className="inline-gauge-fill" style={{width: `${p.cpu_usage}%`, background: p.cpu_usage > 80 ? 'var(--risk-crit)' : 'var(--accent-cyan)'}}></div></div>
+                                </div>
+                            </td>
+                            <td>
+                                <div style={{display:'flex', alignItems:'center', gap:'0.75rem'}}>
+                                    <span style={{fontFamily:'Outfit', fontWeight:700, width:'40px', fontSize:'0.9rem'}}>{p.mem_usage}%</span>
+                                    <div className="inline-gauge-container"><div className="inline-gauge-fill" style={{width: `${p.mem_usage}%`, background: p.mem_usage > 80 ? 'var(--risk-crit)' : 'var(--accent-purple)'}}></div></div>
+                                </div>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    )
+
+
+    const renderNetworkMap = () => (
+        <div className="glass-card" style={{height:'600px', display:'flex', flexDirection:'column', padding:'0', overflow:'hidden'}}>
+            <div style={{padding:'20px', borderBottom:'1px solid rgba(255,255,255,0.05)', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                <div>
+                    <h3 style={{margin:0}}>Network Topology Map</h3>
+                    <p style={{fontSize:'0.8rem', color:'var(--text-secondary)', margin:'5px 0 0'}}>Visualizing service relationships and isolation</p>
+                </div>
+                <div style={{display:'flex', gap:'10px'}}>
+                    <div className="severity-tag low">Intra-Namespace</div>
+                    <div className="severity-tag high">Cross-Namespace</div>
+                </div>
+            </div>
+            <div style={{flex:1, position:'relative', background:'radial-gradient(circle at center, rgba(30,41,59,0.5) 0%, transparent 80%)'}}>
+                <svg width="100%" height="100%" viewBox="0 0 800 500">
+                    <defs>
+                        <marker id="arrow" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                            <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(255,255,255,0.2)" />
+                        </marker>
+                    </defs>
+                    {topology.links.map((link, i) => {
+                        const s = topology.nodes.find(n => n.id === link.source);
+                        const t = topology.nodes.find(n => n.id === link.target);
+                        if(!s || !t) return null;
+                        const idxS = topology.nodes.indexOf(s);
+                        const idxT = topology.nodes.indexOf(t);
+                        const x1 = 100 + (idxS % 5) * 150;
+                        const y1 = 100 + Math.floor(idxS / 5) * 120;
+                        const x2 = 100 + (idxT % 5) * 150;
+                        const y2 = 100 + Math.floor(idxT / 5) * 120;
+                        return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(255,255,255,0.1)" strokeWidth="1" markerEnd="url(#arrow)" />
+                    })}
+                    {topology.nodes.map((node, i) => {
+                        const x = 100 + (i % 5) * 150;
+                        const y = 100 + Math.floor(i / 5) * 120;
+                        return (
+                            <g key={i} transform={`translate(${x},${y})`}>
+                                <circle r="25" fill={node.isolated ? 'rgba(34,197,94,0.1)' : 'rgba(59,130,246,0.1)'} stroke={node.isolated ? '#22c55e' : '#3b82f6'} strokeWidth="2" />
+                                <text y="40" textAnchor="middle" fill="#fff" fontSize="10">{node.id}</text>
+                                <text y="52" textAnchor="middle" fill="var(--text-secondary)" fontSize="8">{node.namespace}</text>
+                            </g>
+                        );
+                    })}
+                </svg>
+            </div>
+        </div>
+    )
+
+    const renderRBACGraph = () => (
+        <div className="glass-card" style={{height:'600px', display:'flex', flexDirection:'column', padding:'0', overflow:'hidden'}}>
+             <div style={{padding:'20px', borderBottom:'1px solid rgba(255,255,255,0.05)'}}>
+                <h3 style={{margin:0}}>RBAC Permission Vision</h3>
+                <p style={{fontSize:'0.8rem', color:'var(--text-secondary)', margin:'5px 0 0'}}>Relationship graph of Subject ⮕ Role</p>
+            </div>
+            <div style={{flex:1, position:'relative'}}>
+               <svg width="100%" height="100%" viewBox="0 0 800 500">
+                    {rbacGraph.links.map((link, i) => {
+                        const s = rbacGraph.nodes.find(n => n.id === link.source);
+                        const t = rbacGraph.nodes.find(n => n.id === link.target);
+                        if(!s || !t) return null;
+                        const idxS = rbacGraph.nodes.indexOf(s);
+                        const idxT = rbacGraph.nodes.indexOf(t);
+                        const x1 = 150;
+                        const y1 = 50 + idxS * 40;
+                        const x2 = 550;
+                        const y2 = 50 + idxT * 80;
+                        return <path key={i} d={`M ${x1} ${y1} C ${x1+200} ${y1}, ${x2-200} ${y2}, ${x2} ${y2}`} fill="none" stroke="rgba(139, 92, 246, 0.2)" strokeWidth="1.5" />
+                    })}
+                    {rbacGraph.nodes.map((node, i) => {
+                        const isSubject = node.type === 'subject';
+                        const x = isSubject ? 150 : 550;
+                        const y = 50 + (isSubject ? i * 40 : (i-rbacGraph.nodes.filter(n=>n.type==='subject').length) * 80);
+                        return (
+                            <g key={i} transform={`translate(${x},${y})`}>
+                                <rect x="-100" y="-15" width="200" height="30" rx="15" fill={isSubject ? 'rgba(139,92,246,0.1)' : 'rgba(236,72,153,0.1)'} stroke={isSubject ? '#8b5cf6' : '#ec4899'} />
+                                <text textAnchor="middle" dy="5" fill="#fff" fontSize="11">{node.id}</text>
+                            </g>
+                        );
+                    })}
+               </svg>
+            </div>
+        </div>
+    )
+
+    const renderAdvisories = () => (
+        <div style={{display:'flex', flexDirection:'column', gap:'20px'}}>
+             <div className="section-header">
+                <div>
+                    <div className="section-title">Security Advisories</div>
+                    <div className="section-subtitle">Prioritized remediation steps for active risks</div>
+                </div>
+            </div>
+            {advisories.map((adv, i) => (
+                <div key={adv.id} className="glass-card" style={{display:'flex', gap:'25px', padding:'25px'}}>
+                    <div style={{width:'60px', height:'60px', borderRadius:'12px', background: adv.severity === 'Critical' ? 'rgba(239,68,68,0.1)' : 'rgba(249,115,22,0.1)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.5rem'}}>
+                        {adv.severity === 'Critical' ? '🛑' : '⚠️'}
+                    </div>
+                    <div style={{flex:1}}>
+                        <div style={{display:'flex', justifyContent:'space-between', marginBottom:'10px'}}>
+                            <h3 style={{margin:0, color: adv.severity === 'Critical' ? '#ef4444' : '#f97316'}}>{adv.title}</h3>
+                            <div className={`severity-tag ${adv.severity.toLowerCase()}`}>{adv.severity}</div>
+                        </div>
+                        <p style={{margin:'0 0 15px', color:'var(--text-secondary)'}}><strong>Target:</strong> {adv.target} — {adv.finding}</p>
+                        <div className="yaml-box" style={{padding:'15px', fontSize:'0.85rem', color:'var(--accent-cyan)'}}>
+                            <div style={{marginBottom:'5px', fontWeight:'bold', color:'var(--text-secondary)'}}>Recommended Fix:</div>
+                            {adv.remediation}
+                        </div>
+                    </div>
+                    <div style={{display:'flex', alignItems:'center'}}>
+                        <button className="glass-button primary" style={{padding:'10px 20px'}}>Apply Fix</button>
+                    </div>
+                </div>
+            ))}
+            {advisories.length === 0 && (
+                <div className="glass-card" style={{padding:'50px', textAlign:'center'}}>
+                    <div style={{fontSize:'3rem', marginBottom:'20px'}}>🎉</div>
+                    <h3>No Critical Advisories</h3>
+                    <p style={{color:'var(--text-secondary)'}}>Your environment currently meets the established baseline security standards.</p>
+                </div>
+            )}
+        </div>
+    )
+
+    const renderCompliance = () => (
+        <div style={{display:'flex', flexDirection:'column', gap:'30px'}}>
+            <div className="section-header">
+                <div style={{display:'flex', alignItems:'center', gap:'15px'}}>
+                    <div style={{fontSize:'2rem'}}>📋</div>
+                    <div>
+                        <div className="section-title">CIS Kubernetes Benchmarks</div>
+                        <div className="section-subtitle">Automated security auditing via ShieldKube-Go Engine</div>
+                    </div>
+                </div>
+                <div className="glass-card" style={{padding:'10px 20px', display:'flex', alignItems:'center', gap:'15px', background:'rgba(59, 130, 246, 0.1)'}}>
+                    <div style={{fontSize:'0.8rem', color:'var(--text-secondary)'}}>Global Score</div>
+                    <div style={{fontSize:'1.5rem', fontWeight:'bold', color:'var(--accent-blue)'}}>
+                        {compliance.length > 0 ? Math.round(compliance.reduce((acc, curr) => acc + curr.score, 0) / compliance.length) : 'N/A'}%
+                    </div>
+                </div>
+            </div>
+
+            {compliance.map((framework, idx) => (
+                <div key={idx} className="glass-card" style={{padding:'0', overflow:'hidden', border:'1px solid rgba(255,255,255,0.05)'}}>
+                    <div style={{padding:'20px 25px', background:'rgba(255,255,255,0.02)', borderBottom:'1px solid rgba(255,255,255,0.05)', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                        <div>
+                            <div style={{fontSize:'1.1rem', fontWeight:'bold', marginBottom:'4px'}}>{framework.framework}</div>
+                            <div style={{fontSize:'0.85rem', color:'var(--text-secondary)'}}>{framework.description}</div>
+                        </div>
+                        <div style={{textAlign:'right'}}>
+                            <div style={{fontSize:'1.2rem', fontWeight:'bold'}}>{framework.score}%</div>
+                            <div style={{fontSize:'0.75rem', color:'var(--text-secondary)'}}>Compliance Level</div>
+                        </div>
+                    </div>
+                    <table className="ent-table">
+                        <thead>
+                            <tr>
+                                <th style={{width:'80px'}}>ID</th>
+                                <th>Security Control</th>
+                                <th style={{width:'120px'}}>Status</th>
+                                <th>Recommendation / Finding</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {framework.controls.map((control, cidx) => (
+                                <tr key={cidx}>
+                                    <td style={{fontSize:'0.8rem', fontWeight:'bold', color:'var(--accent-blue)'}}>{control.id}</td>
+                                    <td style={{fontSize:'0.9rem'}}>{control.name}</td>
+                                    <td>
+                                        <div className={`severity-tag ${control.status === 'Passed' ? 'low' : control.status === 'Warning' ? 'medium' : 'high'}`}>
+                                            {control.status}
+                                        </div>
+                                    </td>
+                                    <td style={{fontSize:'0.8rem', color:'var(--text-secondary)', fontStyle:'italic'}}>{control.finding}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            ))}
+
+            {compliance.length === 0 && !loading && (
+                <div className="glass-card" style={{padding:'50px', textAlign:'center'}}>
+                    <div style={{fontSize:'3rem', marginBottom:'20px'}}>🔍</div>
+                    <div style={{fontSize:'1.2rem', fontWeight:'bold', marginBottom:'10px'}}>Go Engine Deep Scan Pending</div>
+                    <div style={{fontSize:'0.9rem', color:'var(--text-secondary)', maxWidth:'400px', margin:'0 auto'}}>
+                        The ShieldKube-Go security engine is required for CIS Benchmarks. 
+                        Please ensure the `backend-go` container is running and syncing data.
+                    </div>
+                </div>
+            )}
+        </div>
+    )
 
     const renderModals = () => (
         <>
@@ -379,8 +661,8 @@ function App() {
                     </button>
                     
                     <div style={{fontSize:'0.65rem', fontWeight:700, color:'var(--text-secondary)', padding:'1rem 0.5rem 0.5rem', textTransform:'uppercase', letterSpacing:'0.1em'}}>Security Posture</div>
-                    {['pods', 'policies', 'rbac', 'vulnerabilities', 'compliance', 'secrets'].map(t => (
-                        <button key={t} onClick={() => { setActiveTab(t); if(!['pods','inventory','vulnerabilities','secrets'].includes(t)) setFilterNamespace(null); }} className={`nav-item ${activeTab === t ? 'active' : ''}`}>
+                    {['pods', 'network', 'rbac', 'vulnerabilities', 'compliance', 'secrets', 'advisories'].map(t => (
+                        <button key={t} onClick={() => { setActiveTab(t); setFilterNamespace(null); }} className={`nav-item ${activeTab === t ? 'active' : ''}`}>
                             <span className="nav-icon">⬡</span> {t.charAt(0).toUpperCase() + t.slice(1).replace('_', ' ')}
                         </button>
                     ))}
@@ -437,6 +719,8 @@ function App() {
                 {/* Dashboard / Content */}
                 <div className="content-wrapper">
                     
+                    {activeTab === 'compliance' && renderCompliance()}
+
                     {activeTab === 'dashboard' && summary && (
                         <>
                             {/* Hero Card */}
@@ -533,111 +817,14 @@ function App() {
 
                     {/* Content Views */}
                     {activeTab !== 'dashboard' && (
-                        <div className="main-content-grid" style={{ gridTemplateColumns: (activeTab === 'compliance' || activeTab === 'monitoring') ? '1fr' : '1fr 350px' }}>
+                        <div className="main-content-grid" style={{ gridTemplateColumns: (['compliance', 'monitoring', 'network', 'rbac', 'advisories'].includes(activeTab)) ? '1fr' : '1fr 350px' }}>
                             <div className="glass-card visual-section" style={{ minHeight: '600px'}}>
                                 
-                                {activeTab === 'compliance' && (
-                                    <div className="compliance-grid">
-                                        {compliance.map((c, idx) => (
-                                            <div key={idx} className="glass-card compliance-card" style={{background: 'rgba(255,255,255,0.02)'}}>
-                                                <div className="compliance-card-header">
-                                                    <div className="comp-brand">
-                                                        <h3>{c.framework}</h3>
-                                                        <p>{c.description}</p>
-                                                    </div>
-                                                    <div className="comp-pct" style={{ color: getScoreColor(c.score) }}>{c.score}%</div>
-                                                </div>
-                                                <div className="controls-mapping">
-                                                    {c.controls.map((ctrl, cidx) => (
-                                                        <div key={cidx} className="control-row">
-                                                            <div className="control-id-tag">{ctrl.id}</div>
-                                                            <div className="control-main">
-                                                                <div className="control-title-bar">
-                                                                    <span className="control-name-text">{ctrl.name}</span>
-                                                                    <span className={`severity-tag ${ctrl.status.toLowerCase()}`}>{ctrl.status}</span>
-                                                                </div>
-                                                                <div className="control-finding-text">{ctrl.finding}</div>
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {activeTab === 'monitoring' && (
-                                    <div className="monitoring-view">
-                                        <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '2rem'}}>
-                                            <div className="glass-card metric-card" style={{background: 'rgba(255,255,255,0.02)'}}>
-                                                <h4 style={{marginBottom:'1rem', fontSize:'0.85rem', color:'var(--text-secondary)', textTransform:'uppercase'}}>Node Utilization</h4>
-                                                <ResponsiveContainer width="100%" height={220}>
-                                                    <BarChart data={metrics.nodes}>
-                                                        <XAxis dataKey="name" stroke="#64748b" fontSize={10} />
-                                                        <YAxis unit="%" stroke="#64748b" fontSize={10} />
-                                                        <ReTooltip contentStyle={{ background: '#09090b', border: '1px solid #27272a', borderRadius:'8px' }} />
-                                                        <Bar dataKey="cpu_usage" fill="#0ea5e9" name="CPU Usage %" radius={[4, 4, 0, 0]} />
-                                                        <Bar dataKey="mem_usage" fill="#8b5cf6" name="Mem Usage %" radius={[4, 4, 0, 0]} />
-                                                    </BarChart>
-                                                </ResponsiveContainer>
-                                            </div>
-                                            <div className="glass-card metric-card" style={{background: 'rgba(255,255,255,0.02)'}}>
-                                                <h4 style={{marginBottom:'1rem', fontSize:'0.85rem', color:'var(--text-secondary)', textTransform:'uppercase'}}>Pod CPU Distribution</h4>
-                                                <ResponsiveContainer width="100%" height={220}>
-                                                    <PieChart>
-                                                        <Pie data={metrics.pods} dataKey="cpu_usage" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5}>
-                                                            {metrics.pods.map((_, index) => <Cell key={index} fill={index % 2 === 0 ? '#0ea5e9' : '#8b5cf6'} />)}
-                                                        </Pie>
-                                                        <ReTooltip contentStyle={{ background: '#09090b', border: '1px solid #27272a', borderRadius:'8px' }} />
-                                                    </PieChart>
-                                                </ResponsiveContainer>
-                                            </div>
-                                        </div>
-                                        
-                                        <table className="ent-table">
-                                            <thead><tr><th>Node</th><th>CPU Scale</th><th>Memory Scale</th><th>CPU Usage</th><th>Mem Usage</th></tr></thead>
-                                            <tbody>
-                                                {metrics.nodes.map((n, idx) => (
-                                                    <tr key={idx}>
-                                                        <td><div className="asset-name">{n.name}</div></td>
-                                                        <td>{n.cpu}</td>
-                                                        <td>{n.memory}</td>
-                                                        <td><div className={`severity-tag ${n.cpu_usage > 80 ? 'critical' : 'low'}`}>{n.cpu_usage}%</div></td>
-                                                        <td><div className={`severity-tag ${n.mem_usage > 80 ? 'critical' : 'low'}`}>{n.mem_usage}%</div></td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-
-                                        <h4 style={{marginTop:'3rem', marginBottom:'1rem', fontSize:'0.85rem', color:'var(--text-secondary)', textTransform:'uppercase'}}>Active Pod Telemetry</h4>
-                                        <table className="ent-table">
-                                            <thead><tr><th>Pod Identity</th><th>Live CPU Utilization</th><th>Live Memory Utilization</th></tr></thead>
-                                            <tbody>
-                                                {metrics.pods.map((p, idx) => (
-                                                    <tr key={idx}>
-                                                        <td>
-                                                            <div className="asset-name" style={{fontSize: '0.9rem'}}>{p.name}</div>
-                                                            <div className="asset-meta"><span className="ns-pill">{p.namespace}</span></div>
-                                                        </td>
-                                                        <td>
-                                                            <div style={{display:'flex', alignItems:'center', gap:'0.75rem'}}>
-                                                                <span style={{fontFamily:'Outfit', fontWeight:700, width:'40px', fontSize:'0.9rem'}}>{p.cpu_usage}%</span>
-                                                                <div className="inline-gauge-container"><div className="inline-gauge-fill" style={{width: `${p.cpu_usage}%`, background: p.cpu_usage > 80 ? 'var(--risk-crit)' : 'var(--accent-cyan)'}}></div></div>
-                                                            </div>
-                                                        </td>
-                                                        <td>
-                                                            <div style={{display:'flex', alignItems:'center', gap:'0.75rem'}}>
-                                                                <span style={{fontFamily:'Outfit', fontWeight:700, width:'40px', fontSize:'0.9rem'}}>{p.mem_usage}%</span>
-                                                                <div className="inline-gauge-container"><div className="inline-gauge-fill" style={{width: `${p.mem_usage}%`, background: p.mem_usage > 80 ? 'var(--risk-crit)' : 'var(--accent-purple)'}}></div></div>
-                                                            </div>
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                )}
-
+                                {activeTab === 'network' && renderNetworkMap()}
+                                {activeTab === 'rbac' && renderRBACGraph()}
+                                {activeTab === 'advisories' && renderAdvisories()}
+                                {activeTab === 'compliance' && renderCompliance()}
+                                {activeTab === "monitoring" && renderMonitoring()}
                                 {activeTab === 'inventory' && (
                                     <>
                                         <div className="sub-tabs-list">

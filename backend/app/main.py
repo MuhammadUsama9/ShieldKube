@@ -312,6 +312,66 @@ async def remediate(data: dict):
         )
     return {"status": "error", "msg": "Remediation on remote agent clusters not yet supported"}
 
+@app.get("/api/topology")
+async def get_topology(cluster_id: str = "local"):
+    """Generates a graph structure for network topology."""
+    if cluster_id == "local":
+        pods = scanner.scan_pods()
+        policies = scanner.scan_network_policies()
+    else:
+        pods = db.get_telemetry(cluster_id, "pods", [])
+        policies = db.get_telemetry(cluster_id, "network_policies", [])
+    
+    nodes = [{"id": p["name"], "type": "pod", "namespace": p["namespace"], "isolated": False} for p in pods]
+    links = []
+    
+    # Simple namespace-based grouping for links
+    for i, p1 in enumerate(nodes):
+        for j, p2 in enumerate(nodes):
+            if i < j and p1["namespace"] == p2["namespace"]:
+                links.append({"source": p1["id"], "target": p2["id"]})
+                
+    return {"nodes": nodes, "links": links}
+
+@app.get("/api/rbac/graph")
+async def get_rbac_graph(cluster_id: str = "local"):
+    """Generates a graph for RBAC relationships."""
+    if cluster_id == "local": rbac = scanner.scan_rbac()
+    else: rbac = db.get_telemetry(cluster_id, "rbac", [])
+    
+    nodes = []
+    links = []
+    for entry in rbac:
+        sub = entry.get("subject", "Unknown")
+        role = entry.get("role", "Unknown")
+        if not any(n["id"] == sub for n in nodes): nodes.append({"id": sub, "type": "subject"})
+        if not any(n["id"] == role for n in nodes): nodes.append({"id": role, "type": "role"})
+        links.append({"source": sub, "target": role})
+    return {"nodes": nodes, "links": links}
+
+@app.get("/api/advisories")
+async def get_advisories(cluster_id: str = "local"):
+    """Generates actionable security advisories."""
+    if cluster_id == "local":
+        pods = scanner.scan_pods()
+        vulns = scanner.scan_vulnerabilities()
+    else:
+        pods = db.get_telemetry(cluster_id, "pods", [])
+        vulns = db.get_telemetry(cluster_id, "vulnerabilities", {})
+        
+    advisories = []
+    for p in pods:
+        if p.get("status") == "Running" and "security-critical" in p.get("name", ""): # Simulating finding
+             advisories.append({
+                "id": f"ADV-PRIV-{p['name']}",
+                "title": "Privileged Container Risk",
+                "severity": "High",
+                "target": p["name"],
+                "finding": "Workload is running with sensitive host mounts.",
+                "remediation": "Remove hostPath mounts and use persistent volume claims."
+            })
+    return advisories
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
