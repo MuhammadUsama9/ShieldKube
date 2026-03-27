@@ -2,7 +2,11 @@ import os
 import time
 import requests
 import schedule
+import gzip
+import json
 from app.scanner import K8sScanner
+
+CACHE_FILE = "/tmp/shieldkube_offline_cache.json"
 
 # Configuration from Environment Variables
 SHIELDKUBE_URL = os.getenv("SHIELDKUBE_URL", "http://host.minikube.internal:8000")
@@ -21,12 +25,20 @@ MOCK_MODE = os.getenv("MOCK_MODE", "false").lower() == "true"
 AGENT_API_KEY = os.getenv("SHIELDKUBE_API_KEY", "shieldkube-default-key-2024")
 
 def sync_with_retry(url, payload, max_retries=5):
-    """Sync data to backend with exponential backoff retry logic."""
-    headers = {"X-API-KEY": AGENT_API_KEY}
+    """Sync data to backend with exponential backoff retry logic and gzip compression."""
+    headers = {
+        "X-API-KEY": AGENT_API_KEY,
+        "Content-Encoding": "gzip",
+        "Content-Type": "application/json"
+    }
+    
+    # Compress payload
+    compressed_payload = gzip.compress(json.dumps(payload).encode('utf-8'))
+    
     backoff = 2
     for attempt in range(max_retries):
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=15)
+            response = requests.post(url, data=compressed_payload, headers=headers, timeout=15)
             if response.status_code == 200:
                 print(f"[{time.strftime('%H:%M:%S')}] Sync Successful (Attempt {attempt + 1})")
                 return True
@@ -50,6 +62,10 @@ def run_scan_and_sync():
     try:
         scanner = K8sScanner(mock_mode=MOCK_MODE)
         
+        if not scanner.is_connected and not scanner.mock_mode:
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] K8s API unreachable. Skipping scan cycle.")
+            return
+        
         # Collect all data
         pods = scanner.scan_pods()
         policies = scanner.scan_network_policies()
@@ -61,7 +77,8 @@ def run_scan_and_sync():
         total_risks = 0
         
         for item in pods + policies + rbac:
-            severity_dist[item.get("severity", "Low")] += 1
+            sev = item.get("severity", "Low").capitalize()
+            severity_dist[sev] = severity_dist.get(sev, 0) + 1
             total_risks += len(item.get("risks", []))
             
         total_vulns = sum(len(vlist) for vlist in vulnerabilities.values())
@@ -103,8 +120,36 @@ def run_scan_and_sync():
         
         if success:
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Successfully synced to main backend.")
+            # Flush cache if it exists
+            if os.path.exists(CACHE_FILE):
+                try:
+                    with open(CACHE_FILE, "r") as f:
+                        cached_payloads = json.load(f)
+                    
+                    if cached_payloads:
+                        print(f"[{time.strftime('%H:%M:%S')}] Flushing {len(cached_payloads)} cached payloads...")
+                        for cp in cached_payloads:
+                            sync_with_retry(sync_url, cp, max_retries=1)
+                            
+                    os.remove(CACHE_FILE)
+                except Exception as cache_err:
+                    print(f"Cache flush error: {cache_err}")
         else:
-            print(f"Failed to sync after multiple attempts.")
+            print(f"Failed to sync after multiple attempts. Caching payload offline.")
+            try:
+                cached = []
+                if os.path.exists(CACHE_FILE):
+                    with open(CACHE_FILE, "r") as f:
+                        cached = json.load(f)
+                
+                cached.append(payload)
+                if len(cached) > 10:
+                    cached = cached[-10:]
+                    
+                with open(CACHE_FILE, "w") as f:
+                    json.dump(cached, f)
+            except Exception as cache_err:
+                print(f"Failed to write offline cache: {cache_err}")
             
     except Exception as e:
         sync_url = f"{SHIELDKUBE_URL}/api/agent/v1/sync/{CLUSTER_ID}"

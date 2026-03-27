@@ -31,20 +31,28 @@ async def health_check():
     return {"status": "healthy", "mock_mode": scanner.mock_mode}
 
 @app.get("/api/dashboard/bootstrap/{cluster_id}")
-async def bootstrap_dashboard(cluster_id: str = "local"):
+def bootstrap_dashboard(cluster_id: str = "local"):
     print(f"[{time.strftime('%H:%M:%S')}] BOOTSTRAP: Request for {cluster_id}")
     try:
         # Consolidate most critical data for initial load
-        clusters = await get_clusters()
+        clusters = get_clusters()
         print(f"[{time.strftime('%H:%M:%S')}] BOOTSTRAP: Clusters fetched")
-        summary = await get_summary(cluster_id)
+        if cluster_id == "local":
+            summary = get_summary("local")
+            pods = get_pods("local")
+            vulnerabilities = get_vulnerabilities("local")
+            radar = get_radar("local")
+        else:
+            summary = db.get_telemetry(cluster_id, "summary", {
+                "total_pods": 0, "total_policies": 0, "total_rbac": 0,
+                "total_vulnerabilities": 0, "total_risks": 0, "security_score": 0,
+                "severity_distribution": {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
+            })
+            pods = db.get_telemetry(cluster_id, "pods", [])
+            vulnerabilities = db.get_telemetry(cluster_id, "vulnerabilities", {})
+            radar = db.get_telemetry(cluster_id, "radar", [])
+        
         print(f"[{time.strftime('%H:%M:%S')}] BOOTSTRAP: Summary fetched")
-        pods = await get_pods(cluster_id)
-        print(f"[{time.strftime('%H:%M:%S')}] BOOTSTRAP: Pods fetched")
-        vulnerabilities = await get_vulnerabilities(cluster_id)
-        print(f"[{time.strftime('%H:%M:%S')}] BOOTSTRAP: Vulns fetched")
-        radar = await get_radar(cluster_id)
-        print(f"[{time.strftime('%H:%M:%S')}] BOOTSTRAP: Radar fetched")
         
         return {
             "clusters": clusters,
@@ -58,7 +66,7 @@ async def bootstrap_dashboard(cluster_id: str = "local"):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/clusters")
-async def get_clusters():
+def get_clusters():
     clusters = db.get_clusters()
     # Format for frontend expectations if needed
     for c in clusters:
@@ -74,12 +82,28 @@ async def delete_cluster(cluster_id: str):
     db.delete_cluster(cluster_id)
     return {"status": "success"}
 
+import gzip
+import json
+
 @app.post("/api/agent/v1/sync/{cluster_id}")
-async def sync_agent_data(cluster_id: str, request: Request, payload: dict = Body(...)):
+async def sync_agent_data(cluster_id: str, request: Request):
     # 1. Authenticate Agent
     api_key = request.headers.get("X-API-KEY")
     if api_key != AGENT_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
+
+    # Read raw body and handle optional GZIP compression
+    body_bytes = await request.body()
+    if request.headers.get("Content-Encoding") == "gzip":
+        try:
+            body_bytes = gzip.decompress(body_bytes)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail="Gzip decompression failed")
+            
+    try:
+        payload = json.loads(body_bytes)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
     # 2. Update Cluster Registry
     db.update_cluster(cluster_id, payload.get("cluster_name", f"Cluster {cluster_id}"))
@@ -123,6 +147,11 @@ async def get_agent_install_yaml(request: Request, cluster_id: str = "remote-1",
         base_url = f"{request.url.scheme}://{request.headers.get('host')}"
         if request.headers.get("x-forwarded-proto") == "https":
             base_url = f"https://{request.headers.get('host')}"
+            
+    # CRITICAL: Kubernetes pods cannot route to the host machine using 'localhost'.
+    # We must translate it to the Minikube/Docker host gateway.
+    if "localhost" in base_url or "127.0.0.1" in base_url:
+        base_url = base_url.replace("localhost", "host.minikube.internal").replace("127.0.0.1", "host.minikube.internal")
     
     print(f"[{time.strftime('%H:%M:%S')}] Generating install YAML for {cluster_id}. Agent callback: {base_url}")
         
@@ -177,9 +206,13 @@ spec:
       serviceAccountName: shieldkube-agent-sa
       containers:
       - name: agent
-        # Use pre-built agent image for enterprise stability
-        image: shieldkube-agent:latest
-        imagePullPolicy: IfNotPresent
+        image: python:3.11-slim
+        command: ["/bin/sh", "-c"]
+        args:
+        - >
+          python3 -c "import urllib.request, os; os.makedirs('app', exist_ok=True); urllib.request.urlretrieve('$SHIELDKUBE_URL/api/agent/agent.py', 'agent.py'); urllib.request.urlretrieve('$SHIELDKUBE_URL/api/agent/app/scanner.py', 'app/scanner.py'); open('app/__init__.py', 'w').close()" &&
+          pip install --no-cache-dir requests kubernetes schedule &&
+          python3 -u agent.py
         env:
         - name: SHIELDKUBE_URL
           value: "{base_url}"
@@ -196,35 +229,35 @@ spec:
         resources:
           limits:
             cpu: "250m"
-            memory: "256Mi"
+            memory: "512Mi"
           requests:
             cpu: "100m"
-            memory: "128Mi"
+            memory: "256Mi"
 """
     return yaml_script.strip()
 
 @app.get("/api/pods")
-async def get_pods(cluster_id: str = "local"):
+def get_pods(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_pods()
     return db.get_telemetry(cluster_id, "pods", [])
 
 @app.get("/api/heatmap")
-async def get_heatmap(cluster_id: str = "local"):
+def get_heatmap(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_heatmap()
     return db.get_telemetry(cluster_id, "heatmap", [])
 
 @app.get("/api/rbac")
-async def get_rbac(cluster_id: str = "local"):
+def get_rbac(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_rbac()
     return db.get_telemetry(cluster_id, "rbac", [])
 
 @app.get("/api/network-policies")
-async def get_network_policies(cluster_id: str = "local"):
+def get_network_policies(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_network_policies()
     return db.get_telemetry(cluster_id, "network_policies", [])
 
 @app.get("/api/summary")
-async def get_summary(cluster_id: str = "local"):
+def get_summary(cluster_id: str = "local"):
     if cluster_id == "local":
         pods = scanner.scan_pods()
         policies = scanner.scan_network_policies()
@@ -256,47 +289,47 @@ async def get_summary(cluster_id: str = "local"):
     })
 
 @app.get("/api/inventory")
-async def get_inventory(cluster_id: str = "local"):
+def get_inventory(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_inventory()
     return db.get_telemetry(cluster_id, "inventory", [])
 
 @app.get("/api/vulnerabilities")
-async def get_vulnerabilities(cluster_id: str = "local"):
+def get_vulnerabilities(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_vulnerabilities()
     return db.get_telemetry(cluster_id, "vulnerabilities", {})
 
 @app.get("/api/radar")
-async def get_radar(cluster_id: str = "local"):
+def get_radar(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_radar_data()
     return db.get_telemetry(cluster_id, "radar", [])
 
 @app.get("/api/trends")
-async def get_trends(cluster_id: str = "local"):
+def get_trends(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_trends()
     return db.get_telemetry(cluster_id, "trends", [])
 
 @app.get("/api/logs")
-async def get_logs(cluster_id: str = "local"):
+def get_logs(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.get_logs()
     return db.get_telemetry(cluster_id, "logs", [])
 
 @app.get("/api/compliance")
-async def get_compliance(cluster_id: str = "local"):
+def get_compliance(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_compliance()
     return db.get_telemetry(cluster_id, "compliance", [])
 
 @app.get("/api/metrics")
-async def get_metrics(cluster_id: str = "local"):
+def get_metrics(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_metrics()
     return db.get_telemetry(cluster_id, "metrics", {"pods": [], "nodes": []})
 
 @app.get("/api/events")
-async def get_events(cluster_id: str = "local"):
+def get_events(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_events()
     return db.get_telemetry(cluster_id, "events", [])
 
 @app.get("/api/secrets")
-async def get_secrets(cluster_id: str = "local"):
+def get_secrets(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_secrets()
     return db.get_telemetry(cluster_id, "secrets", [])
 
@@ -313,7 +346,7 @@ async def remediate(data: dict):
     return {"status": "error", "msg": "Remediation on remote agent clusters not yet supported"}
 
 @app.get("/api/topology")
-async def get_topology(cluster_id: str = "local"):
+def get_topology(cluster_id: str = "local"):
     """Generates a graph structure for network topology."""
     if cluster_id == "local":
         pods = scanner.scan_pods()
@@ -334,7 +367,7 @@ async def get_topology(cluster_id: str = "local"):
     return {"nodes": nodes, "links": links}
 
 @app.get("/api/rbac/graph")
-async def get_rbac_graph(cluster_id: str = "local"):
+def get_rbac_graph(cluster_id: str = "local"):
     """Generates a graph for RBAC relationships."""
     if cluster_id == "local": rbac = scanner.scan_rbac()
     else: rbac = db.get_telemetry(cluster_id, "rbac", [])
@@ -350,7 +383,7 @@ async def get_rbac_graph(cluster_id: str = "local"):
     return {"nodes": nodes, "links": links}
 
 @app.get("/api/advisories")
-async def get_advisories(cluster_id: str = "local"):
+def get_advisories(cluster_id: str = "local"):
     """Generates actionable security advisories."""
     if cluster_id == "local":
         pods = scanner.scan_pods()

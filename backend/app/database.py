@@ -18,6 +18,7 @@ class ShieldKubeDB:
             print(f"[{time.strftime('%H:%M:%S')}] DB: Connecting to {DB_PATH}")
             self.conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
             self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA journal_mode=WAL;")
             self._init_db()
         except Exception as e:
             print(f"[{time.strftime('%H:%M:%S')}] CRITICAL DB ERROR: {e}")
@@ -27,6 +28,7 @@ class ShieldKubeDB:
                 print(f"[{time.strftime('%H:%M:%S')}] DB: Falling back to in-memory emergency storage.")
                 self.conn = sqlite3.connect(":memory:", check_same_thread=False)
                 self.conn.row_factory = sqlite3.Row
+                self.conn.execute("PRAGMA journal_mode=WAL;")
                 self._init_db()
 
     def _init_db(self):

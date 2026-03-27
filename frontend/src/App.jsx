@@ -292,77 +292,267 @@ function App() {
                 )}
             </div>
         )
-    }    const renderMonitoring = () => (
-        <div className="monitoring-view">
-            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '2rem'}}>
-                <div className="glass-card metric-card" style={{background: 'rgba(255,255,255,0.02)'}}>
-                    <h4 style={{marginBottom:'1rem', fontSize:'0.85rem', color:'var(--text-secondary)', textTransform:'uppercase'}}>Node Utilization</h4>
-                    <ResponsiveContainer width="100%" height={220}>
-                        <BarChart data={metrics.nodes}>
-                            <XAxis dataKey="name" stroke="#64748b" fontSize={10} />
-                            <YAxis unit="%" stroke="#64748b" fontSize={10} />
-                            <ReTooltip contentStyle={{ background: '#09090b', border: '1px solid #27272a', borderRadius:'8px' }} />
-                            <Bar dataKey="cpu_usage" fill="#0ea5e9" name="CPU Usage %" radius={[4, 4, 0, 0]} />
-                            <Bar dataKey="mem_usage" fill="#8b5cf6" name="Mem Usage %" radius={[4, 4, 0, 0]} />
-                        </BarChart>
-                    </ResponsiveContainer>
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // MONITORING – Premium Redesign
+    // ──────────────────────────────────────────────────────────────────────────
+    const renderMonitoring = () => {
+        const totalPods   = metrics.pods.length
+        const healthyPods = metrics.pods.filter(p => p.cpu_usage < 70 && p.mem_usage < 70).length
+        const warnPods    = metrics.pods.filter(p => (p.cpu_usage >= 70 && p.cpu_usage < 90) || (p.mem_usage >= 70 && p.mem_usage < 90)).length
+        const critPods    = metrics.pods.filter(p => p.cpu_usage >= 90 || p.mem_usage >= 90).length
+        const avgCpu      = totalPods > 0 ? Math.round(metrics.pods.reduce((a, p) => a + p.cpu_usage, 0) / totalPods) : 0
+        const avgMem      = totalPods > 0 ? Math.round(metrics.pods.reduce((a, p) => a + p.mem_usage, 0) / totalPods) : 0
+
+        const clusterOk   = critPods === 0 && warnPods < 3
+        const clusterColor = critPods > 0 ? '#ef4444' : warnPods > 0 ? '#f97316' : '#22c55e'
+        const clusterLabel = critPods > 0 ? 'Action Required' : warnPods > 0 ? 'Degraded Performance' : 'All Systems Operational'
+
+        const pctColor = v => v >= 90 ? '#ef4444' : v >= 70 ? '#f97316' : '#22c55e'
+        const pctLabel = v => v >= 90 ? 'Critical' : v >= 70 ? 'Warning' : 'Healthy'
+
+        // SVG circular gauge helper
+        const CircleGauge = ({ pct, color, label, sublabel, size = 110 }) => {
+            const r = size / 2 - 10
+            const circ = 2 * Math.PI * r
+            const dash = (pct / 100) * circ
+            return (
+                <div style={{display:'flex', flexDirection:'column', alignItems:'center', gap:'0.5rem'}}>
+                    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{transform:'rotate(-90deg)'}}>
+                        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="10"/>
+                        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="10"
+                            strokeDasharray={`${dash} ${circ - dash}`} strokeLinecap="round"
+                            style={{transition:'stroke-dasharray 1s ease'}}/>
+                        <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central"
+                            style={{fill:'#fff', fontSize:'18px', fontWeight:800, fontFamily:'Outfit', transform:'rotate(90deg)', transformOrigin:'center'}}>
+                            {pct}%
+                        </text>
+                    </svg>
+                    <div style={{textAlign:'center'}}>
+                        <div style={{fontWeight:700, fontSize:'0.85rem'}}>{label}</div>
+                        <div style={{fontSize:'0.72rem', color:'var(--text-secondary)', marginTop:'2px'}}>{sublabel}</div>
+                    </div>
                 </div>
-                <div className="glass-card metric-card" style={{background: 'rgba(255,255,255,0.02)'}}>
-                    <h4 style={{marginBottom:'1rem', fontSize:'0.85rem', color:'var(--text-secondary)', textTransform:'uppercase'}}>Pod CPU Distribution</h4>
-                    <ResponsiveContainer width="100%" height={220}>
-                        <PieChart>
-                            <Pie data={metrics.pods} dataKey="cpu_usage" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5}>
-                                {metrics.pods.map((_, index) => <Cell key={index} fill={index % 2 === 0 ? '#0ea5e9' : '#8b5cf6'} />)}
-                            </Pie>
-                            <ReTooltip contentStyle={{ background: '#09090b', border: '1px solid #27272a', borderRadius:'8px' }} />
-                        </PieChart>
-                    </ResponsiveContainer>
+            )
+        }
+
+        const noMetrics = metrics.pods.length === 0 && metrics.nodes.length === 0
+
+        return (
+        <div style={{display:'flex', flexDirection:'column', gap:'1.5rem'}}>
+
+            {/* ── Overall Cluster Health Banner ── */}
+            <div style={{
+                borderRadius:'16px', padding:'1.25rem 1.75rem',
+                background: `linear-gradient(135deg, ${clusterColor}15 0%, ${clusterColor}05 100%)`,
+                border:`1px solid ${clusterColor}40`,
+                display:'flex', alignItems:'center', justifyContent:'space-between'
+            }}>
+                <div style={{display:'flex', alignItems:'center', gap:'1rem'}}>
+                    <div style={{
+                        width:'48px', height:'48px', borderRadius:'50%',
+                        background:`${clusterColor}20`, display:'flex', alignItems:'center', justifyContent:'center',
+                        fontSize:'1.5rem', border:`2px solid ${clusterColor}60`
+                    }}>
+                        {critPods > 0 ? '🚨' : warnPods > 0 ? '⚠️' : '✅'}
+                    </div>
+                    <div>
+                        <div style={{fontWeight:800, fontSize:'1.15rem', color:clusterColor}}>{clusterLabel}</div>
+                        <div style={{fontSize:'0.8rem', color:'var(--text-secondary)', marginTop:'3px'}}>
+                            Cluster is being monitored · Last updated just now
+                        </div>
+                    </div>
+                </div>
+                <div style={{display:'flex', gap:'2rem', textAlign:'center'}}>
+                    {[
+                        {v: healthyPods, l: 'Healthy Pods', c: '#22c55e'},
+                        {v: warnPods,    l: 'Degraded',     c: '#f97316'},
+                        {v: critPods,    l: 'Critical',      c: '#ef4444'},
+                    ].map(({v,l,c}) => (
+                        <div key={l}>
+                            <div style={{fontSize:'1.75rem', fontWeight:900, fontFamily:'Outfit', color:c, lineHeight:1}}>{v}</div>
+                            <div style={{fontSize:'0.72rem', color:'var(--text-secondary)', marginTop:'4px', textTransform:'uppercase', letterSpacing:'0.06em'}}>{l}</div>
+                        </div>
+                    ))}
                 </div>
             </div>
-            
-            <table className="ent-table">
-                <thead><tr><th>Node</th><th>CPU Scale</th><th>Memory Scale</th><th>CPU Usage</th><th>Mem Usage</th></tr></thead>
-                <tbody>
-                    {metrics.nodes.map((n, idx) => (
-                        <tr key={idx}>
-                            <td><div className="asset-name">{n.name}</div></td>
-                            <td>{n.cpu}</td>
-                            <td>{n.memory}</td>
-                            <td><div className={`severity-tag ${n.cpu_usage > 80 ? 'critical' : 'low'}`}>{n.cpu_usage}%</div></td>
-                            <td><div className={`severity-tag ${n.mem_usage > 80 ? 'critical' : 'low'}`}>{n.mem_usage}%</div></td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
 
-            <h4 style={{marginTop:'3rem', marginBottom:'1rem', fontSize:'0.85rem', color:'var(--text-secondary)', textTransform:'uppercase'}}>Active Pod Telemetry</h4>
-            <table className="ent-table">
-                <thead><tr><th>Pod Identity</th><th>Live CPU Utilization</th><th>Live Memory Utilization</th></tr></thead>
-                <tbody>
-                    {metrics.pods.map((p, idx) => (
-                        <tr key={idx}>
-                            <td>
-                                <div className="asset-name" style={{fontSize: '0.9rem'}}>{p.name}</div>
-                                <div className="asset-meta"><span className="ns-pill">{p.namespace}</span></div>
-                            </td>
-                            <td>
-                                <div style={{display:'flex', alignItems:'center', gap:'0.75rem'}}>
-                                    <span style={{fontFamily:'Outfit', fontWeight:700, width:'40px', fontSize:'0.9rem'}}>{p.cpu_usage}%</span>
-                                    <div className="inline-gauge-container"><div className="inline-gauge-fill" style={{width: `${p.cpu_usage}%`, background: p.cpu_usage > 80 ? 'var(--risk-crit)' : 'var(--accent-cyan)'}}></div></div>
+            {noMetrics ? (
+                /* ── No Metrics State ── */
+                <div className="glass-card" style={{padding:'4rem', textAlign:'center'}}>
+                    <div style={{fontSize:'3rem', marginBottom:'1rem'}}>📡</div>
+                    <div style={{fontWeight:700, fontSize:'1.1rem', marginBottom:'0.5rem'}}>Metrics Server Not Installed</div>
+                    <div style={{fontSize:'0.875rem', color:'var(--text-secondary)', maxWidth:'420px', margin:'0 auto 1.5rem'}}>
+                        To enable real-time CPU and memory tracking for your pods and nodes, install the Kubernetes Metrics Server.
+                    </div>
+                    <div style={{
+                        background:'rgba(14,165,233,0.08)', border:'1px solid rgba(14,165,233,0.3)',
+                        borderRadius:'10px', padding:'0.875rem 1.25rem', fontFamily:'monospace',
+                        fontSize:'0.8rem', color:'#38bdf8', maxWidth:'500px', margin:'0 auto', textAlign:'left'
+                    }}>
+                        kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+                    </div>
+                </div>
+            ) : (
+                <>
+                {/* ── Cluster-Wide Gauge Ring ── */}
+                <div className="glass-card" style={{padding:'2rem', display:'flex', flexDirection:'column', alignItems:'center', gap:'2rem'}}>
+                    <div>
+                        <div style={{textAlign:'center', fontWeight:700, fontSize:'0.75rem', textTransform:'uppercase', letterSpacing:'0.1em', color:'var(--text-secondary)', marginBottom:'0.25rem'}}>
+                            Cluster-Wide Average Resource Usage
+                        </div>
+                        <div style={{textAlign:'center', fontSize:'0.8rem', color:'var(--text-secondary)', opacity:0.6}}>
+                            Based on {totalPods} active pods
+                        </div>
+                    </div>
+                    <div style={{display:'flex', gap:'4rem', justifyContent:'center', flexWrap:'wrap'}}>
+                        <CircleGauge pct={avgCpu} color={pctColor(avgCpu)} label="CPU Usage" sublabel={`Avg across ${totalPods} pods`} size={130}/>
+                        <CircleGauge pct={avgMem} color={pctColor(avgMem)} label="Memory Usage" sublabel={`Avg across ${totalPods} pods`} size={130}/>
+                        {metrics.nodes.length > 0 && (
+                            <CircleGauge
+                                pct={Math.round(metrics.nodes.reduce((a,n) => a+n.cpu_usage,0) / metrics.nodes.length)}
+                                color="#0ea5e9" label="Node CPU" sublabel={`Avg across ${metrics.nodes.length} nodes`} size={130}/>
+                        )}
+                        {metrics.nodes.length > 0 && (
+                            <CircleGauge
+                                pct={Math.round(metrics.nodes.reduce((a,n) => a+n.mem_usage,0) / metrics.nodes.length)}
+                                color="#8b5cf6" label="Node Memory" sublabel={`Avg across ${metrics.nodes.length} nodes`} size={130}/>
+                        )}
+                    </div>
+                </div>
+
+                {/* ── Node Health Cards ── */}
+                {metrics.nodes.length > 0 && (
+                    <div>
+                        <div style={{fontSize:'0.75rem', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.1em', color:'var(--text-secondary)', marginBottom:'0.75rem'}}>
+                            🖥️ Node Health · {metrics.nodes.length} nodes
+                        </div>
+                        <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(280px, 1fr))', gap:'1rem'}}>
+                            {metrics.nodes.map((node, i) => {
+                                const worst = Math.max(node.cpu_usage, node.mem_usage)
+                                const nc = pctColor(worst)
+                                return (
+                                    <div key={i} style={{
+                                        borderRadius:'14px', padding:'1.25rem',
+                                        background:'rgba(255,255,255,0.02)',
+                                        border:`1px solid rgba(255,255,255,0.07)`,
+                                        borderTop:`3px solid ${nc}`,
+                                        position:'relative', overflow:'hidden'
+                                    }}>
+                                        {/* Glow */}
+                                        <div style={{position:'absolute', top:0, left:0, right:0, height:'40px',
+                                            background:`linear-gradient(to bottom, ${nc}10, transparent)`, pointerEvents:'none'}}/>
+                                        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'1.25rem'}}>
+                                            <div>
+                                                <div style={{fontWeight:800, fontSize:'0.95rem', marginBottom:'3px'}}>{node.name}</div>
+                                                <div style={{fontSize:'0.72rem', color:'var(--text-secondary)'}}>
+                                                    {node.roles || 'worker'} · {node.status || 'Ready'}
+                                                </div>
+                                            </div>
+                                            <div style={{
+                                                padding:'4px 10px', borderRadius:'20px', fontSize:'0.72rem', fontWeight:700,
+                                                background:`${nc}20`, color:nc, border:`1px solid ${nc}40`
+                                            }}>
+                                                {pctLabel(worst)}
+                                            </div>
+                                        </div>
+                                        {[
+                                            {label:'CPU', val:node.cpu_usage, detail:node.cpu, color:pctColor(node.cpu_usage)},
+                                            {label:'Memory', val:node.mem_usage, detail:node.memory, color:'#8b5cf6'},
+                                        ].map(({label, val, detail, color}) => (
+                                            <div key={label} style={{marginBottom:'0.65rem'}}>
+                                                <div style={{display:'flex', justifyContent:'space-between', marginBottom:'5px', fontSize:'0.78rem'}}>
+                                                    <span style={{color:'var(--text-secondary)'}}>{label} <span style={{color:'rgba(255,255,255,0.3)', fontSize:'0.7rem'}}>· {detail}</span></span>
+                                                    <span style={{fontWeight:800, color, fontFamily:'Outfit'}}>{val}%</span>
+                                                </div>
+                                                <div style={{height:'7px', borderRadius:'99px', background:'rgba(255,255,255,0.06)', overflow:'hidden'}}>
+                                                    <div style={{
+                                                        height:'100%', borderRadius:'99px', width:`${val}%`,
+                                                        background:`linear-gradient(90deg, ${color}99, ${color})`,
+                                                        boxShadow:`0 0 8px ${color}60`, transition:'width 1s ease'
+                                                    }}/>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                {/* ── Pod List ── */}
+                <div>
+                    <div style={{fontSize:'0.75rem', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.1em', color:'var(--text-secondary)', marginBottom:'0.75rem'}}>
+                        📦 Pod Telemetry · {totalPods} active pods
+                    </div>
+                    <div style={{display:'flex', flexDirection:'column', gap:'0.5rem'}}>
+                        {metrics.pods.map((p, i) => {
+                            const worst = Math.max(p.cpu_usage, p.mem_usage)
+                            const pc = pctColor(worst)
+                            return (
+                                <div key={i} style={{
+                                    borderRadius:'12px', padding:'0.875rem 1.25rem',
+                                    background:'rgba(255,255,255,0.02)',
+                                    border:'1px solid rgba(255,255,255,0.06)',
+                                    display:'grid', gridTemplateColumns:'1fr auto 200px 200px 90px',
+                                    alignItems:'center', gap:'1.5rem'
+                                }}>
+                                    {/* Pod Name */}
+                                    <div>
+                                        <div style={{fontWeight:600, fontSize:'0.88rem', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'220px'}}>{p.name}</div>
+                                    </div>
+                                    {/* Namespace tag */}
+                                    <span style={{fontSize:'0.7rem', padding:'2px 8px', borderRadius:'99px',
+                                        background:'rgba(14,165,233,0.1)', color:'#38bdf8', whiteSpace:'nowrap',
+                                        border:'1px solid rgba(14,165,233,0.2)'}}>
+                                        {p.namespace}
+                                    </span>
+                                    {/* CPU bar */}
+                                    <div>
+                                        <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.72rem', marginBottom:'4px'}}>
+                                            <span style={{color:'var(--text-secondary)'}}>CPU</span>
+                                            <span style={{fontWeight:700, color:pctColor(p.cpu_usage), fontFamily:'Outfit'}}>{p.cpu_usage}%</span>
+                                        </div>
+                                        <div style={{height:'5px', borderRadius:'99px', background:'rgba(255,255,255,0.06)'}}>
+                                            <div style={{height:'100%', borderRadius:'99px', width:`${p.cpu_usage}%`,
+                                                background:`linear-gradient(90deg, ${pctColor(p.cpu_usage)}80, ${pctColor(p.cpu_usage)})`,
+                                                transition:'width 0.8s ease'}}/>
+                                        </div>
+                                    </div>
+                                    {/* Memory bar */}
+                                    <div>
+                                        <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.72rem', marginBottom:'4px'}}>
+                                            <span style={{color:'var(--text-secondary)'}}>Memory</span>
+                                            <span style={{fontWeight:700, color:pctColor(p.mem_usage), fontFamily:'Outfit'}}>{p.mem_usage}%</span>
+                                        </div>
+                                        <div style={{height:'5px', borderRadius:'99px', background:'rgba(255,255,255,0.06)'}}>
+                                            <div style={{height:'100%', borderRadius:'99px', width:`${p.mem_usage}%`,
+                                                background:'linear-gradient(90deg, #7c3aed, #8b5cf6)',
+                                                transition:'width 0.8s ease'}}/>
+                                        </div>
+                                    </div>
+                                    {/* Status pill */}
+                                    <div style={{textAlign:'right'}}>
+                                        <span style={{fontSize:'0.72rem', padding:'4px 10px', borderRadius:'99px', fontWeight:700,
+                                            background:`${pc}15`, color:pc, border:`1px solid ${pc}35`}}>
+                                            {pctLabel(worst)}
+                                        </span>
+                                    </div>
                                 </div>
-                            </td>
-                            <td>
-                                <div style={{display:'flex', alignItems:'center', gap:'0.75rem'}}>
-                                    <span style={{fontFamily:'Outfit', fontWeight:700, width:'40px', fontSize:'0.9rem'}}>{p.mem_usage}%</span>
-                                    <div className="inline-gauge-container"><div className="inline-gauge-fill" style={{width: `${p.mem_usage}%`, background: p.mem_usage > 80 ? 'var(--risk-crit)' : 'var(--accent-purple)'}}></div></div>
-                                </div>
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
+                            )
+                        })}
+                    </div>
+                </div>
+                </>
+            )}
         </div>
     )
+
+
+}
+
 
 
     const renderNetworkMap = () => (

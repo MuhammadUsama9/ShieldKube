@@ -63,6 +63,13 @@ class K8sScanner:
     def __init__(self, mock_mode: bool = False):
         self.mock_mode = mock_mode
         self.scan_logs = []
+        self.is_connected = False
+        self.v1 = None
+        self.apps_v1 = None
+        self.networking_v1 = None
+        self.rbac_v1 = None
+        self.policy_v1 = None
+        
         if not self.mock_mode:
             try:
                 # Try in-cluster first, then local config
@@ -78,6 +85,7 @@ class K8sScanner:
                 self.networking_v1 = client.NetworkingV1Api()
                 self.rbac_v1 = client.RbacAuthorizationV1Api()
                 self.policy_v1 = client.PolicyV1Api()
+                self.is_connected = True
                 self._log("ShieldKube Engine v1.0 (Live Audit) Initialized.")
             except Exception as e:
                 self._log(f"Connection Error: {e}", "error")
@@ -139,8 +147,8 @@ class K8sScanner:
             
             return inv
         except Exception as e:
-            self._log(f"Inventory scan error: {e}. Showing mock inventory.", "error")
-            return self._get_mock_inventory()
+            self._log(f"Inventory scan error: {e}.", "error")
+            return self._get_mock_inventory() if self.mock_mode else []
 
     def scan_vulnerabilities(self) -> Dict[str, List[Dict[str, Any]]]:
         self._log("Running workload-centric CVE audit...")
@@ -213,8 +221,8 @@ class K8sScanner:
 
             return results
         except Exception as e:
-            self._log(f"Deep scan error: {e}. Falling back to simulations.", "error")
-            return self._get_mock_deep_vulnerabilities()
+            self._log(f"Deep scan error: {e}.", "error")
+            return self._get_mock_deep_vulnerabilities() if self.mock_mode else {"pods": [], "nodes": [], "volumes": [], "replica_sets": [], "deployments": [], "infrastructure": []}
 
     def _check_image_cve(self, image: str) -> List[Dict]:
         """
@@ -283,8 +291,8 @@ class K8sScanner:
                 res.append({"name": p.metadata.name, "namespace": p.metadata.namespace, "risks": risks, "severity": self._calculate_severity(risks)})
             return res
         except Exception as e:
-            self._log(f"Pod scan error: {e}. Falling back to simulations.", "error")
-            return self._get_mock_pods()
+            self._log(f"Pod scan error: {e}.", "error")
+            return self._get_mock_pods() if self.mock_mode else []
 
     def scan_network_policies(self) -> List[Dict[str, Any]]:
         self._log("Auditing Network Isolation policies...")
@@ -407,7 +415,7 @@ class K8sScanner:
             return res
         except Exception as e:
             self._log(f"Events Error: {e}", "error")
-            return self._get_mock_events()
+            return self._get_mock_events() if self.mock_mode else []
 
     def scan_secrets(self) -> List[Dict[str, Any]]:
         self._log("Auditing Secret and ConfigMap contents...")
@@ -562,7 +570,7 @@ class K8sScanner:
             return {"pods": pods_data, "nodes": nodes_data}
         except Exception as e:
             self._log(f"Metrics Error: {e}", "error")
-            return {"pods": [], "nodes": []}
+            return self._get_mock_metrics() if self.mock_mode else {"pods": [], "nodes": []}
 
     def remediate_resource(self, kind: str, name: str, namespace: str, patch_data: str) -> Dict:
         self._log(f"EXECUTING REMEDIATION: {kind}/{name} in {namespace}...")

@@ -63,6 +63,13 @@ class K8sScanner:
     def __init__(self, mock_mode: bool = False):
         self.mock_mode = mock_mode
         self.scan_logs = []
+        self.is_connected = False
+        self.v1 = None
+        self.apps_v1 = None
+        self.networking_v1 = None
+        self.rbac_v1 = None
+        self.policy_v1 = None
+        
         if not self.mock_mode:
             try:
                 # Try in-cluster first, then local config
@@ -78,6 +85,7 @@ class K8sScanner:
                 self.networking_v1 = client.NetworkingV1Api()
                 self.rbac_v1 = client.RbacAuthorizationV1Api()
                 self.policy_v1 = client.PolicyV1Api()
+                self.is_connected = True
                 self._log("ShieldKube Engine v1.0 (Live Audit) Initialized.")
             except Exception as e:
                 self._log(f"Connection Error: {e}", "error")
@@ -139,8 +147,8 @@ class K8sScanner:
             
             return inv
         except Exception as e:
-            self._log(f"Inventory scan error: {e}. Showing mock inventory.", "error")
-            return self._get_mock_inventory()
+            self._log(f"Inventory scan error: {e}.", "error")
+            return self._get_mock_inventory() if self.mock_mode else []
 
     def scan_vulnerabilities(self) -> Dict[str, List[Dict[str, Any]]]:
         self._log("Running workload-centric CVE audit...")
@@ -213,8 +221,8 @@ class K8sScanner:
 
             return results
         except Exception as e:
-            self._log(f"Deep scan error: {e}. Falling back to simulations.", "error")
-            return self._get_mock_deep_vulnerabilities()
+            self._log(f"Deep scan error: {e}.", "error")
+            return self._get_mock_deep_vulnerabilities() if self.mock_mode else {"pods": [], "nodes": [], "volumes": [], "replica_sets": [], "deployments": [], "infrastructure": []}
 
     def _check_image_cve(self, image: str) -> List[Dict]:
         """
@@ -283,8 +291,8 @@ class K8sScanner:
                 res.append({"name": p.metadata.name, "namespace": p.metadata.namespace, "risks": risks, "severity": self._calculate_severity(risks)})
             return res
         except Exception as e:
-            self._log(f"Pod scan error: {e}. Falling back to simulations.", "error")
-            return self._get_mock_pods()
+            self._log(f"Pod scan error: {e}.", "error")
+            return self._get_mock_pods() if self.mock_mode else []
 
     def scan_network_policies(self) -> List[Dict[str, Any]]:
         self._log("Auditing Network Isolation policies...")
@@ -380,7 +388,143 @@ class K8sScanner:
     def scan_compliance(self):
         self._log("Running CIS Compliance audit...")
         if self.mock_mode: return self._get_mock_compliance()
-        return []
+        if not self.is_connected: return []
+        try:
+            controls_cis = []
+            controls_nsa = []
+
+            # --- CIS 5.1: RBAC ---
+            try:
+                cluster_roles = self.rbac_v1.list_cluster_role().items
+                wildcard_roles = [r.metadata.name for r in cluster_roles if r.rules and any(
+                    '*' in (rule.verbs or []) or '*' in (rule.resources or []) for rule in r.rules
+                )]
+                controls_cis.append({
+                    "id": "CIS 5.1.1",
+                    "name": "Ensure cluster-admin role is restricted",
+                    "status": "Warning" if wildcard_roles else "Passed",
+                    "finding": f"ClusterRoles with wildcard permissions: {', '.join(wildcard_roles[:3]) or 'None'}"
+                })
+            except Exception:
+                controls_cis.append({"id": "CIS 5.1.1", "name": "Ensure cluster-admin role is restricted", "status": "Warning", "finding": "Could not audit ClusterRoles"})
+
+            # --- CIS 5.2: Pod Security ---
+            try:
+                pods = self.v1.list_pod_for_all_namespaces(_request_timeout=3).items
+                privileged = [p.metadata.name for p in pods if any(
+                    c.security_context and c.security_context.privileged
+                    for c in (p.spec.containers or [])
+                )]
+                controls_cis.append({
+                    "id": "CIS 5.2.1",
+                    "name": "Minimize privileged containers",
+                    "status": "Failed" if privileged else "Passed",
+                    "finding": f"Privileged pods: {', '.join(privileged[:3])}" if privileged else "No privileged pods found"
+                })
+                root_pods = [p.metadata.name for p in pods if any(
+                    not (c.security_context and c.security_context.run_as_non_root)
+                    for c in (p.spec.containers or [])
+                )]
+                controls_cis.append({
+                    "id": "CIS 5.2.6",
+                    "name": "Minimize containers running as root",
+                    "status": "Warning" if root_pods else "Passed",
+                    "finding": f"{len(root_pods)} containers may run as root" if root_pods else "All containers set runAsNonRoot"
+                })
+            except Exception:
+                controls_cis.append({"id": "CIS 5.2.1", "name": "Minimize privileged containers", "status": "Warning", "finding": "Could not audit pod security"})
+
+            # --- CIS 5.3: Network Policies ---
+            try:
+                namespaces = self.v1.list_namespace(_request_timeout=3).items
+                policies = self.v1.list_network_policy_for_all_namespaces(_request_timeout=3).items
+                policy_ns = {p.metadata.namespace for p in policies}
+                unprotected = [ns.metadata.name for ns in namespaces if ns.metadata.name not in policy_ns and not ns.metadata.name.startswith("kube-")]
+                controls_cis.append({
+                    "id": "CIS 5.3.2",
+                    "name": "Ensure NetworkPolicy is configured",
+                    "status": "Failed" if unprotected else "Passed",
+                    "finding": f"Namespaces without NetworkPolicy: {', '.join(unprotected[:3])}" if unprotected else "All namespaces have NetworkPolicies"
+                })
+            except Exception:
+                controls_cis.append({"id": "CIS 5.3.2", "name": "Ensure NetworkPolicy is configured", "status": "Warning", "finding": "Could not audit network policies"})
+
+            # --- CIS 5.4: Secrets Management ---
+            try:
+                secrets = self.v1.list_secret_for_all_namespaces(_request_timeout=3).items
+                default_sa_secrets = [s.metadata.name for s in secrets if "default-token" in s.metadata.name]
+                controls_cis.append({
+                    "id": "CIS 5.4.1",
+                    "name": "Prefer using secrets as files vs env vars",
+                    "status": "Warning" if default_sa_secrets else "Passed",
+                    "finding": f"{len(default_sa_secrets)} default SA tokens found" if default_sa_secrets else "No default SA tokens found"
+                })
+            except Exception:
+                controls_cis.append({"id": "CIS 5.4.1", "name": "Prefer using secrets as files", "status": "Warning", "finding": "Could not audit secrets"})
+
+            # --- CIS 5.6: Resource Limits ---
+            try:
+                deploys = self.apps_v1.list_deployment_for_all_namespaces(_request_timeout=3).items
+                no_limits = [d.metadata.name for d in deploys if d.spec.template.spec.containers and any(
+                    not c.resources or not c.resources.limits for c in d.spec.template.spec.containers
+                )]
+                controls_cis.append({
+                    "id": "CIS 5.6.1",
+                    "name": "Apply CPU and memory limits to containers",
+                    "status": "Failed" if no_limits else "Passed",
+                    "finding": f"{len(no_limits)} deployments missing resource limits" if no_limits else "All deployments have resource limits"
+                })
+            except Exception:
+                controls_cis.append({"id": "CIS 5.6.1", "name": "Apply CPU and memory limits", "status": "Warning", "finding": "Could not audit resource limits"})
+
+            # --- NSA Controls ---
+            try:
+                # Check for automount SA token
+                pods = self.v1.list_pod_for_all_namespaces(_request_timeout=3).items
+                automount = [p.metadata.name for p in pods if p.spec.automount_service_account_token is not False]
+                controls_nsa.append({
+                    "id": "NSA 6.1",
+                    "name": "Disable automounting of service account tokens",
+                    "status": "Warning" if len(automount) > 3 else "Passed",
+                    "finding": f"{len(automount)} pods automount SA tokens" if automount else "SA token automounting disabled"
+                })
+                # Check for read-only root filesystem
+                read_write = [f"{p.metadata.namespace}/{p.metadata.name}" for p in pods if any(
+                    not (c.security_context and c.security_context.read_only_root_filesystem)
+                    for c in (p.spec.containers or [])
+                )]
+                controls_nsa.append({
+                    "id": "NSA 6.3",
+                    "name": "Use immutable (read-only) root filesystems",
+                    "status": "Warning" if read_write else "Passed",
+                    "finding": f"{len(read_write)} containers with writable root filesystems" if read_write else "All containers use read-only root filesystems"
+                })
+            except Exception:
+                controls_nsa.append({"id": "NSA 6.1", "name": "Disable automounting of SA tokens", "status": "Warning", "finding": "Could not audit SA tokens"})
+
+            def score(controls):
+                passed = sum(1 for c in controls if c["status"] == "Passed")
+                return round(passed / len(controls) * 100) if controls else 0
+
+            return [
+                {
+                    "framework": "CIS Kubernetes Benchmark v1.8",
+                    "description": "Center for Internet Security Kubernetes Security Guidelines",
+                    "score": score(controls_cis),
+                    "controls": controls_cis
+                },
+                {
+                    "framework": "NSA/CISA Kubernetes Hardening Guide",
+                    "description": "US National Security Agency Kubernetes hardening recommendations",
+                    "score": score(controls_nsa),
+                    "controls": controls_nsa
+                }
+            ]
+        except Exception as e:
+            self._log(f"Compliance scan error: {e}", "error")
+            return []
+
+
 
     def scan_events(self) -> List[Dict[str, Any]]:
         self._log("Fetching recent cluster events...")
@@ -407,7 +551,7 @@ class K8sScanner:
             return res
         except Exception as e:
             self._log(f"Events Error: {e}", "error")
-            return self._get_mock_events()
+            return self._get_mock_events() if self.mock_mode else []
 
     def scan_secrets(self) -> List[Dict[str, Any]]:
         self._log("Auditing Secret and ConfigMap contents...")
@@ -514,55 +658,92 @@ class K8sScanner:
     def scan_metrics(self):
         self._log("Fetching resource metrics...")
         if self.mock_mode: return self._get_mock_metrics()
-        
+        if not self.is_connected: return {"pods": [], "nodes": []}
+
         try:
+            # Get real node capacity for accurate percentages
+            node_info = {}
+            try:
+                nodes = self.v1.list_node(_request_timeout=3).items
+                for n in nodes:
+                    alloc = n.status.allocatable or {}
+                    cpu_alloc = self._parse_cpu(alloc.get("cpu", "0"))
+                    mem_alloc = self._parse_memory(alloc.get("memory", "0"))
+                    # Determine node status
+                    ready = "Unknown"
+                    for cond in (n.status.conditions or []):
+                        if cond.type == "Ready":
+                            ready = "Ready" if cond.status == "True" else "NotReady"
+                    node_info[n.metadata.name] = {
+                        "cpu_alloc": cpu_alloc,
+                        "mem_alloc": mem_alloc,
+                        "status": ready,
+                        "roles": ",".join([k.split("/")[1] for k in (n.metadata.labels or {}) if "node-role.kubernetes.io/" in k]) or "worker"
+                    }
+            except Exception as e:
+                self._log(f"Node capacity fetch error: {e}", "warn")
+
             custom_api = client.CustomObjectsApi()
-            pod_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "pods")
-            node_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
-            
+
+            # Collect pod metrics
             pods_data = []
-            for item in pod_metrics.get("items", []):
-                name = item["metadata"]["name"]
-                ns = item["metadata"]["namespace"]
-                cpu_total = 0.0
-                mem_total = 0.0
-                for c in item.get("containers", []):
-                    cpu_total += self._parse_cpu(c["usage"]["cpu"])
-                    mem_total += self._parse_memory(c["usage"]["memory"])
-                
-                cpu_pct = min(100, int(cpu_total * 100)) # Approximation: 1 core = 100% capacity for a small pod footprint
-                mem_pct = min(100, int((mem_total / 1024) * 100)) # Approximation: 1GB = 100% capacity
-                
-                pods_data.append({
-                    "name": name,
-                    "namespace": ns,
-                    "cpu": f"{cpu_total:.3f} cores",
-                    "memory": f"{mem_total:.1f} Mi",
-                    "cpu_usage": max(1, cpu_pct),
-                    "mem_usage": max(1, mem_pct)
-                })
-                
+            try:
+                pod_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "pods")
+                for item in pod_metrics.get("items", []):
+                    name = item["metadata"]["name"]
+                    ns = item["metadata"]["namespace"]
+                    cpu_total = sum(self._parse_cpu(c["usage"]["cpu"]) for c in item.get("containers", []))
+                    mem_total = sum(self._parse_memory(c["usage"]["memory"]) for c in item.get("containers", []))
+                    # Use node allocatable if available, else rough estimate
+                    cpu_pct = min(100, int(cpu_total * 100))
+                    mem_pct = min(100, int((mem_total / 1024) * 100))
+                    pods_data.append({
+                        "name": name, "namespace": ns,
+                        "cpu": f"{cpu_total:.3f} cores", "memory": f"{mem_total:.1f} Mi",
+                        "cpu_usage": max(1, cpu_pct), "mem_usage": max(1, mem_pct)
+                    })
+            except Exception as e:
+                self._log(f"Pod metrics error: {e}", "warn")
+
+            # Collect node metrics with real capacities
             nodes_data = []
-            for item in node_metrics.get("items", []):
-                name = item["metadata"]["name"]
-                cpu_total = self._parse_cpu(item["usage"]["cpu"])
-                mem_total = self._parse_memory(item["usage"]["memory"])
-                
-                cpu_pct = min(100, int((cpu_total / 2) * 100))  # Assuming 2 CPU cores total
-                mem_pct = min(100, int((mem_total / 2048) * 100)) # Assuming 2GB total
-                
-                nodes_data.append({
-                    "name": name,
-                    "cpu": f"{cpu_total:.1f} CPU",
-                    "memory": f"{mem_total:.0f} Mi",
-                    "cpu_usage": max(1, cpu_pct),
-                    "mem_usage": max(1, mem_pct)
-                })
-                
+            try:
+                node_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
+                for item in node_metrics.get("items", []):
+                    name = item["metadata"]["name"]
+                    cpu_used = self._parse_cpu(item["usage"]["cpu"])
+                    mem_used = self._parse_memory(item["usage"]["memory"])
+                    info = node_info.get(name, {})
+                    cpu_alloc = info.get("cpu_alloc", max(cpu_used * 1.5, 2.0))
+                    mem_alloc = info.get("mem_alloc", max(mem_used * 1.5, 2048.0))
+                    cpu_pct = min(100, int((cpu_used / cpu_alloc) * 100)) if cpu_alloc > 0 else 0
+                    mem_pct = min(100, int((mem_used / mem_alloc) * 100)) if mem_alloc > 0 else 0
+                    nodes_data.append({
+                        "name": name,
+                        "cpu": f"{cpu_used:.2f}/{cpu_alloc:.1f} cores",
+                        "memory": f"{mem_used:.0f}/{mem_alloc:.0f} Mi",
+                        "cpu_usage": max(1, cpu_pct),
+                        "mem_usage": max(1, mem_pct),
+                        "status": info.get("status", "Ready"),
+                        "roles": info.get("roles", "worker")
+                    })
+            except Exception as e:
+                self._log(f"Node metrics error: {e}", "warn")
+                # Fall back to node info without usage stats
+                for n_name, info in node_info.items():
+                    nodes_data.append({
+                        "name": n_name,
+                        "cpu": f"0/{info['cpu_alloc']:.1f} cores",
+                        "memory": f"0/{info['mem_alloc']:.0f} Mi",
+                        "cpu_usage": 0, "mem_usage": 0,
+                        "status": info["status"], "roles": info["roles"]
+                    })
+
             return {"pods": pods_data, "nodes": nodes_data}
         except Exception as e:
             self._log(f"Metrics Error: {e}", "error")
             return {"pods": [], "nodes": []}
+
 
     def remediate_resource(self, kind: str, name: str, namespace: str, patch_data: str) -> Dict:
         self._log(f"EXECUTING REMEDIATION: {kind}/{name} in {namespace}...")
