@@ -19,6 +19,7 @@
 -   **Secret & ConfigMap Auditor**: Automatically scan for hardcoded credentials, API keys, and weak naming conventions in your cluster configs.
 -   **RBAC permission auditing**: Identify wildcard permissions and over-privileged roles.
 -   **Interactive remediation**: Apply security patches directly from the dashboard.
+-   **Continuous ML Security Engine**: Adaptive unsupervised anomaly detection modeling baseline telemetry distributions via an online Stochastic Gradient Descent One-Class SVM.
 
 ## Tech Stack
 
