@@ -43,20 +43,16 @@ function App() {
     const [topology, setTopology] = useState({ nodes: [], links: [] })
     const [rbacGraph, setRbacGraph] = useState({ nodes: [], links: [] })
     const [advisories, setAdvisories] = useState([])
+    const [mlAnomaly, setMlAnomaly] = useState(null)
 
-    const sidebarItems = [
-        { id: 'dashboard', label: 'Dashboard', icon: '📊' },
-        { id: 'inventory', label: 'Inventory', icon: '📦' },
-        { id: 'vulnerabilities', label: 'Vulnerabilities', icon: '🛡️' },
-        { id: 'compliance', label: 'Compliance', icon: '📋' },
-        { id: 'network', label: 'Network Map', icon: '🕸️' },
-        { id: 'rbac', label: 'RBAC Vision', icon: '🕸️' },
-        { id: 'advisories', label: 'Advisories', icon: '💡' },
-        { id: 'monitoring', label: 'Monitoring', icon: '📈' },
-        { id: 'events', label: 'Events', icon: '🔔' },
-        { id: 'agent', label: 'Agent Install', icon: '🚀' }
-    ]
-    const [activeSubTab, setActiveSubTab] = useState('Workloads') 
+    const TAB_LABELS = {
+        dashboard: 'Dashboard', pods: 'Pod Security', policies: 'Network Policies',
+        network: 'Network Map', rbac: 'RBAC Vision', vulnerabilities: 'Vulnerabilities',
+        compliance: 'Compliance', secrets: 'Secrets & Config', advisories: 'Advisories',
+        inventory: 'Inventory', monitoring: 'Monitoring', events: 'Events',
+        logs: 'Intelligence Log', agent: 'Agent Install'
+    }
+    const [activeSubTab, setActiveSubTab] = useState('Workloads')
     const [activeVulnTab, setActiveVulnTab] = useState('pods') 
     const [search, setSearch] = useState('')
     const [selectedFix, setSelectedFix] = useState(null)
@@ -102,6 +98,7 @@ function App() {
                 setPods(bootData.pods || []);
                 setVulnerabilities(bootData.vulnerabilities || { pods: [], nodes: [], volumes: [], replica_sets: [], deployments: [], infrastructure: [] });
                 setRadarData(bootData.radar || []);
+                setMlAnomaly(bootData.ml_anomaly || null);
             } else {
                 throw new Error(`Bootstrap failed: ${bootResponse.statusText}`);
             }
@@ -242,6 +239,8 @@ function App() {
         else if (activeTab === 'inventory') data = inventory.filter(i => i.group === activeSubTab)
         else if (activeTab === 'vulnerabilities') data = vulnerabilities[activeVulnTab] || []
         else if (activeTab === 'secrets') data = secrets
+        else if (activeTab === 'policies') data = policies
+        else if (activeTab === 'logs') data = logs
 
         if (filterNamespace) data = data.filter(item => item.namespace === filterNamespace || item.namespace === "Global" || item.namespace === "Cluster-wide")
         return data.filter(item => (item.name || item.target || item.image || "").toLowerCase().includes(search.toLowerCase()))
@@ -677,6 +676,164 @@ function App() {
         </div>
     )
 
+    const renderLogs = () => {
+        const LOG_COLORS = { info: '#0ea5e9', warn: '#f97316', error: '#ef4444', critical: '#dc2626', debug: '#94a3b8' }
+        const levelCounts = logs.reduce((acc, l) => { const k = (l.level||'info').toLowerCase(); acc[k] = (acc[k]||0)+1; return acc; }, {})
+        const filteredLogs = logs.filter(l => (l.msg||'').toLowerCase().includes(search.toLowerCase()) || (l.timestamp||'').includes(search))
+        return (
+            <div style={{display:'flex', flexDirection:'column', gap:'1.25rem', height:'100%'}}>
+                {/* Header */}
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'0.75rem'}}>
+                    <div>
+                        <div style={{fontWeight:800, fontSize:'1.1rem'}}>Enterprise Intelligence Log</div>
+                        <div style={{fontSize:'0.78rem', color:'var(--text-secondary)', marginTop:'2px'}}>{logs.length} total entries · live tail enabled</div>
+                    </div>
+                    <div style={{display:'flex', gap:'0.6rem', flexWrap:'wrap'}}>
+                        {Object.entries(levelCounts).map(([lvl, cnt]) => (
+                            <span key={lvl} style={{fontSize:'0.72rem', padding:'3px 10px', borderRadius:'99px', fontWeight:700,
+                                background:`${LOG_COLORS[lvl] || '#64748b'}18`, color: LOG_COLORS[lvl] || '#64748b',
+                                border:`1px solid ${LOG_COLORS[lvl] || '#64748b'}35`, textTransform:'uppercase', letterSpacing:'0.05em'}}>
+                                {lvl} · {cnt}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+                {/* Terminal */}
+                <div ref={consoleRef} style={{
+                    flex:1, minHeight:'520px', maxHeight:'70vh', overflowY:'auto',
+                    background:'rgba(0,0,0,0.4)', borderRadius:'12px',
+                    border:'1px solid rgba(255,255,255,0.07)',
+                    padding:'1rem', fontFamily:'Fira Code, ui-monospace, monospace', fontSize:'0.78rem',
+                    lineHeight:'1.7', display:'flex', flexDirection:'column', gap:'2px'
+                }}>
+                    {filteredLogs.length === 0 && (
+                        <div style={{color:'var(--text-muted)', padding:'2rem', textAlign:'center'}}>
+                            {logs.length === 0 ? '⬡ Awaiting telemetry stream...' : 'No log entries match the current filter.'}
+                        </div>
+                    )}
+                    {filteredLogs.map((l, i) => {
+                        const lvl = (l.level||'info').toLowerCase()
+                        const col = LOG_COLORS[lvl] || '#94a3b8'
+                        return (
+                            <div key={i} style={{display:'flex', gap:'0.75rem', alignItems:'flex-start', padding:'2px 4px', borderRadius:'4px',
+                                background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent'}}>
+                                <span style={{color:'#475569', flexShrink:0, minWidth:'80px', fontSize:'0.7rem'}}>{l.timestamp || '--:--:--'}</span>
+                                <span style={{color:col, flexShrink:0, minWidth:'52px', fontWeight:700, textTransform:'uppercase', fontSize:'0.68rem'}}>[{lvl}]</span>
+                                <span style={{color:'#e2e8f0', wordBreak:'break-all'}} dangerouslySetInnerHTML={{ __html: l.msg || '' }} />
+                            </div>
+                        )
+                    })}
+                </div>
+            </div>
+        )
+    }
+
+    const renderAgent = () => (
+        <div style={{display:'flex', flexDirection:'column', gap:'1.5rem'}}>
+            {/* Hero Banner */}
+            <div style={{
+                borderRadius:'16px', padding:'2rem',
+                background:'linear-gradient(135deg, rgba(99,102,241,0.15) 0%, rgba(14,165,233,0.08) 100%)',
+                border:'1px solid rgba(99,102,241,0.3)',
+                display:'flex', alignItems:'center', gap:'1.5rem'
+            }}>
+                <div style={{fontSize:'3rem'}}>🚀</div>
+                <div>
+                    <div style={{fontWeight:800, fontSize:'1.3rem', marginBottom:'0.3rem'}}>Agent Installation</div>
+                    <div style={{fontSize:'0.85rem', color:'var(--text-secondary)', maxWidth:'600px'}}>
+                        Deploy the ShieldKube agent to any remote Kubernetes cluster. It will auto-install,
+                        establish a secure sync channel, and begin streaming security telemetry back to this dashboard.
+                    </div>
+                </div>
+            </div>
+
+            {/* Two Column Layout */}
+            <div style={{display:'grid', gridTemplateColumns:'1fr 380px', gap:'1.5rem', alignItems:'start'}}>
+                {/* Install Form */}
+                <div className="glass-card" style={{padding:'1.75rem', display:'flex', flexDirection:'column', gap:'1.25rem'}}>
+                    <div style={{fontWeight:700, fontSize:'1rem'}}>⚙️ Configure Remote Connection</div>
+                    <div>
+                        <label style={{fontSize:'0.85rem', color:'var(--text-secondary)', display:'block', marginBottom:'0.5rem'}}>
+                            🌐 ShieldKube Public URL <span style={{color:'#ef4444'}}>*</span>
+                        </label>
+                        <input type="text" value={publicUrl} onChange={(e) => setPublicUrl(e.target.value)}
+                            placeholder="e.g. http://203.0.113.5:8000" className="glass-select"
+                            style={{width:'100%', border:`1px solid ${publicUrl.trim() ? 'rgba(34,197,94,0.5)' : 'rgba(239,68,68,0.5)'}`}} />
+                        <p style={{fontSize:'0.75rem', color:'#64748b', marginTop:'0.3rem', margin:'0.3rem 0 0'}}>
+                            ⚠️ Must be reachable from the remote cluster — <strong>not localhost</strong>.
+                        </p>
+                    </div>
+                    <div>
+                        <label style={{fontSize:'0.85rem', color:'var(--text-secondary)', display:'block', marginBottom:'0.5rem'}}>Cluster Name:</label>
+                        <input type="text" value={newClusterName} onChange={(e) => setNewClusterName(e.target.value)}
+                            placeholder="e.g. AWS Production Ops" className="glass-select" style={{width:'100%'}} />
+                    </div>
+
+                    {/* Generated Command */}
+                    <div>
+                        <div style={{fontSize:'0.8rem', fontWeight:700, color:'var(--text-secondary)', marginBottom:'0.5rem', textTransform:'uppercase', letterSpacing:'0.06em'}}>Generated Install Command</div>
+                        <div className="yaml-box" style={{position:'relative'}}>
+                            <pre style={{whiteSpace:'pre-wrap', wordBreak:'break-all', margin:0, fontSize:'0.78rem'}}>{generateInstallCommand()}</pre>
+                        </div>
+                    </div>
+
+                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                        <div style={{display:'flex', alignItems:'center', gap:'0.5rem', color:'var(--text-secondary)', fontSize:'0.82rem'}}>
+                            <span className="pulse-dot" style={{background:'var(--accent-blue)', animationDuration:'2s'}}></span>
+                            Awaiting agent connection...
+                        </div>
+                        <button className="glass-button primary"
+                            onClick={() => { navigator.clipboard.writeText(generateInstallCommand()); setNotification({type:'success', msg:'Install command copied!'}); }}>
+                            📋 Copy Command
+                        </button>
+                    </div>
+                </div>
+
+                {/* Status Panel */}
+                <div style={{display:'flex', flexDirection:'column', gap:'1rem'}}>
+                    <div className="glass-card" style={{padding:'1.5rem'}}>
+                        <div style={{fontWeight:700, fontSize:'0.9rem', marginBottom:'1rem'}}>📡 Connected Clusters</div>
+                        {clusters.filter(c => !c.is_local).length === 0 ? (
+                            <div style={{padding:'1.5rem', textAlign:'center', color:'var(--text-secondary)', fontSize:'0.85rem'}}>
+                                No remote agents connected yet.<br/>Run the command to connect your first cluster.
+                            </div>
+                        ) : (
+                            clusters.filter(c => !c.is_local).map(c => (
+                                <div key={c.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0.75rem', borderRadius:'10px', background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)', marginBottom:'0.5rem'}}>
+                                    <div>
+                                        <div style={{fontWeight:700, fontSize:'0.88rem'}}>{c.name}</div>
+                                        <div style={{fontSize:'0.72rem', color:'var(--text-secondary)', marginTop:'2px'}}>{c.id}</div>
+                                    </div>
+                                    <div style={{display:'flex', alignItems:'center', gap:'0.5rem'}}>
+                                        <span style={{fontSize:'0.72rem', padding:'3px 10px', borderRadius:'99px', fontWeight:700,
+                                            background: c.status === 'Active' ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+                                            color: c.status === 'Active' ? '#22c55e' : '#ef4444',
+                                            border:`1px solid ${c.status === 'Active' ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`}}>
+                                            {c.status === 'Active' ? '● Live' : '○ Offline'}
+                                        </span>
+                                        <button className="glass-button secondary" style={{fontSize:'0.7rem', padding:'3px 8px', color:'var(--risk-crit)'}}
+                                            onClick={() => handleRemoveCluster(c.id)}>Remove</button>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                        <button className="glass-button primary" style={{width:'100%', marginTop:'0.75rem'}} onClick={() => setShowAddCluster(true)}>
+                            ＋ Add via Quick Install Modal
+                        </button>
+                    </div>
+
+                    <div className="glass-card" style={{padding:'1.5rem'}}>
+                        <div style={{fontWeight:700, fontSize:'0.9rem', marginBottom:'0.75rem'}}>🔐 Security</div>
+                        <div style={{fontSize:'0.8rem', color:'var(--text-secondary)', lineHeight:1.6}}>
+                            All agent traffic is authenticated via <strong style={{color:'var(--accent-cyan)'}}>X-API-KEY</strong> and compressed with <strong style={{color:'var(--accent-cyan)'}}>gzip</strong>.
+                            Each agent uses offline caching to handle backend outages with automatic reconnect.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    )
+
     const renderCompliance = () => (
         <div style={{display:'flex', flexDirection:'column', gap:'30px'}}>
             <div className="section-header">
@@ -766,7 +923,7 @@ function App() {
                             </div>
                         </div>
                         <div className="drawer-footer">
-                            <button className="glass-button secondary">Copy Patch</button>
+                            <button className="glass-button secondary" onClick={() => { navigator.clipboard.writeText(selectedFix.patch || `Remediation Plan:\n1. Pull patched image\n2. Update ${selectedFix.target} spec\n3. Roll out update`); setNotification({type:'success', msg:'Patch copied to clipboard!'}); }}>Copy Patch</button>
                             <button className="glass-button primary" onClick={() => handleRemediate(selectedFix)}>Deploy Fix</button>
                         </div>
                     </div>
@@ -849,20 +1006,25 @@ function App() {
                     <button onClick={() => { setActiveTab('dashboard'); setFilterNamespace(null); setSearch(''); }} className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}>
                         <span className="nav-icon">◱</span> Dashboard
                     </button>
-                    
+
                     <div style={{fontSize:'0.65rem', fontWeight:700, color:'var(--text-secondary)', padding:'1rem 0.5rem 0.5rem', textTransform:'uppercase', letterSpacing:'0.1em'}}>Security Posture</div>
-                    {['pods', 'network', 'rbac', 'vulnerabilities', 'compliance', 'secrets', 'advisories'].map(t => (
-                        <button key={t} onClick={() => { setActiveTab(t); setFilterNamespace(null); }} className={`nav-item ${activeTab === t ? 'active' : ''}`}>
-                            <span className="nav-icon">⬡</span> {t.charAt(0).toUpperCase() + t.slice(1).replace('_', ' ')}
+                    {[['pods','Pod Security','⬡'],['policies','Network Policies','⬡'],['rbac','RBAC Vision','⬡'],['vulnerabilities','Vulnerabilities','⬡'],['compliance','Compliance','⬡'],['secrets','Secrets & Config','⬡'],['advisories','Advisories','⬡']].map(([id, label]) => (
+                        <button key={id} onClick={() => { setActiveTab(id); setFilterNamespace(null); setSearch(''); }} className={`nav-item ${activeTab === id ? 'active' : ''}`}>
+                            <span className="nav-icon">⬡</span> {label}
                         </button>
                     ))}
 
                     <div style={{fontSize:'0.65rem', fontWeight:700, color:'var(--text-secondary)', padding:'1rem 0.5rem 0.5rem', textTransform:'uppercase', letterSpacing:'0.1em'}}>Operations</div>
-                    {['inventory', 'monitoring', 'events', 'logs'].map(t => (
-                        <button key={t} onClick={() => { setActiveTab(t); setFilterNamespace(null); }} className={`nav-item ${activeTab === t ? 'active' : ''}`}>
-                            <span className="nav-icon">◉</span> {t.charAt(0).toUpperCase() + t.slice(1)}
+                    {[['inventory','Inventory'],['monitoring','Monitoring'],['events','Events'],['logs','Intel Log']].map(([id, label]) => (
+                        <button key={id} onClick={() => { setActiveTab(id); setFilterNamespace(null); setSearch(''); }} className={`nav-item ${activeTab === id ? 'active' : ''}`}>
+                            <span className="nav-icon">◉</span> {label}
                         </button>
                     ))}
+
+                    <div style={{fontSize:'0.65rem', fontWeight:700, color:'var(--text-secondary)', padding:'1rem 0.5rem 0.5rem', textTransform:'uppercase', letterSpacing:'0.1em'}}>Setup</div>
+                    <button onClick={() => { setActiveTab('agent'); setFilterNamespace(null); }} className={`nav-item ${activeTab === 'agent' ? 'active' : ''}`}>
+                        <span className="nav-icon">◉</span> Agent Install
+                    </button>
                 </div>
             </aside>
 
@@ -871,26 +1033,28 @@ function App() {
                 {/* Horizontal Top Bar */}
                 <header className="top-bar">
                     <div className="flex-gap">
-                        <div className="page-title" style={{background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontSize: '1.75rem'}}>{activeTab.replace('_', ' ')}</div>
+                        <div className="page-title" style={{background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontSize: '1.75rem'}}>{TAB_LABELS[activeTab] || activeTab}</div>
                         <StatusBadge pods={pods} />
                     </div>
                     
                     <div className="flex-gap">
-                        {['pods', 'inventory', 'vulnerabilities', 'secrets'].includes(activeTab) && (
+                        {['pods', 'inventory', 'vulnerabilities', 'secrets', 'policies'].includes(activeTab) && (
                             <select className="glass-select" value={filterNamespace || ""} onChange={(e) => setFilterNamespace(e.target.value || null)}>
                                 <option value="">All Namespaces</option>
                                 {namespaces.map(ns => <option key={ns} value={ns}>{ns}</option>)}
                             </select>
                         )}
-                        {activeTab !== 'dashboard' && activeTab !== 'compliance' && activeTab !== 'monitoring' && (
+                        {!['dashboard', 'compliance', 'monitoring', 'agent', 'network', 'rbac'].includes(activeTab) && (
                             <div className="search-wrapper">
                                 <span style={{position:'absolute', left:'0.75rem', opacity:0.5}}>🔍</span>
-                                <input type="text" placeholder={`Search ${activeTab}...`} value={search} onChange={e => setSearch(e.target.value)} style={{paddingLeft: '2.2rem'}} />
+                                <input type="text" placeholder={`Search ${TAB_LABELS[activeTab] || activeTab}...`} value={search} onChange={e => setSearch(e.target.value)} style={{paddingLeft: '2.2rem'}} />
                                 <span className="search-hint">⌘K</span>
                             </div>
                         )}
-                        
+
                         <div style={{height: '24px', width: '1px', background: 'var(--border-subtle)', margin: '0 0.5rem'}}></div>
+
+                        <button className="glass-button secondary" style={{fontSize:'0.78rem', padding:'0.4rem 0.8rem'}} onClick={() => window.print()} title="Export / Print">⎙ Export</button>
 
                         {clusters.length > 0 && (
                             <>
@@ -908,8 +1072,6 @@ function App() {
 
                 {/* Dashboard / Content */}
                 <div className="content-wrapper">
-                    
-                    {activeTab === 'compliance' && renderCompliance()}
 
                     {activeTab === 'dashboard' && summary && (
                         <>
@@ -944,12 +1106,45 @@ function App() {
                                 </div>
                             </div>
 
+                            {/* ML Anomaly Banner */}
+                            {mlAnomaly && (
+                                <div className="glass-card" style={{
+                                    marginBottom: '1.25rem', padding: '1.25rem 1.75rem',
+                                    background: mlAnomaly.is_anomaly ? 'rgba(244,63,94,0.1)' : mlAnomaly.status === 'Learning' ? 'rgba(148,163,184,0.05)' : 'rgba(34,197,94,0.05)',
+                                    border: `1px solid ${mlAnomaly.is_anomaly ? 'rgba(244,63,94,0.3)' : mlAnomaly.status === 'Learning' ? 'rgba(148,163,184,0.2)' : 'rgba(34,197,94,0.2)'}`,
+                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                                }}>
+                                    <div style={{display:'flex', alignItems:'center', gap:'1rem'}}>
+                                        <div style={{fontSize:'2rem'}}>{mlAnomaly.is_anomaly ? '🚨' : mlAnomaly.status === 'Learning' ? '🧠' : '🎯'}</div>
+                                        <div>
+                                            <h3 style={{margin:0, color: mlAnomaly.is_anomaly ? '#ef4444' : mlAnomaly.status === 'Learning' ? '#94a3b8' : '#22c55e'}}>
+                                                Continuous ML Security Engine
+                                            </h3>
+                                            <p style={{margin:'0', fontSize:'0.85rem', color:'var(--text-secondary)'}}>
+                                               {mlAnomaly.status === 'Learning' 
+                                                ? 'AI is analyzing baseline behavior. More data required to solidify predictions.' 
+                                                : mlAnomaly.is_anomaly 
+                                                    ? 'AI has detected an unexpected structural anomaly in telemetry patterns! Check advisories immediately.'
+                                                    : 'AI algorithm validated normal operational bounding dimensions.'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div style={{textAlign:'right'}}>
+                                        <div style={{fontSize:'0.75rem', letterSpacing:'0.05em', textTransform:'uppercase', color:'var(--text-secondary)'}}>Anomaly Probability</div>
+                                        <div style={{fontSize:'1.65rem', fontWeight:'900', color: mlAnomaly.is_anomaly ? '#ef4444' : mlAnomaly.status === 'Learning' ? '#94a3b8' : '#22c55e', fontFamily:'Outfit'}}>
+                                            {mlAnomaly.anomaly_score !== undefined ? `${(mlAnomaly.anomaly_score * 100).toFixed(1)}%` : 'CALC'} 
+                                            <span style={{fontSize:'0.75rem', fontWeight:'normal', opacity:0.7, marginLeft:'5px'}}> / model: SGD</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Metrics Strip */}
                             <div className="metrics-grid">
                                 {[
                                     { label: 'Infrastructure CVEs', value: summary.total_vulnerabilities, color: COLORS.High },
+                                    { label: 'Critical Risks', value: summary.severity_distribution?.Critical || 0, color: COLORS.Critical },
                                     { label: 'Sensitive RBAC', value: rbac.length, color: COLORS.Network },
-                                    { label: 'Managed Assets', value: inventory.length, color: COLORS.Images },
                                     { label: 'Network Isolation', value: policies.length > 0 ? 'Active' : 'Missing', color: policies.length > 0 ? COLORS.Low : COLORS.Critical }
                                 ].map((m, i) => (
                                     <div key={i} className="glass-card compact-metric">
@@ -961,11 +1156,11 @@ function App() {
                                 ))}
                             </div>
 
-                            {/* Charts */}
-                            <div className="dashboard-visuals-grid">
+                            {/* Charts — 4-column grid: line, radar, severity donut, namespace bar */}
+                            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1.25rem'}}>
                                 <div className="glass-card chart-item">
                                     <h3>Security Score Trend</h3>
-                                    <ResponsiveContainer width="100%" height={260}>
+                                    <ResponsiveContainer width="100%" height={240}>
                                         <LineChart data={trends}>
                                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                                             <XAxis dataKey="time" stroke="#64748b" fontSize={11} />
@@ -977,9 +1172,46 @@ function App() {
                                         </LineChart>
                                     </ResponsiveContainer>
                                 </div>
+                                <div className="glass-card chart-item" style={{display:'flex', flexDirection:'column'}}>
+                                    <h3>Severity Distribution</h3>
+                                    {(() => {
+                                        const dist = summary.severity_distribution || {};
+                                        const pieData = [
+                                            { name: 'Critical', value: dist.Critical || 0, fill: COLORS.Critical },
+                                            { name: 'High',     value: dist.High     || 0, fill: COLORS.High },
+                                            { name: 'Medium',   value: dist.Medium   || 0, fill: COLORS.Medium },
+                                            { name: 'Low',      value: dist.Low      || 0, fill: COLORS.Low },
+                                        ].filter(d => d.value > 0);
+                                        const total = pieData.reduce((s,d) => s + d.value, 0);
+                                        if (total === 0) return <div style={{flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-secondary)', fontSize:'0.9rem'}}>No findings detected ✦</div>;
+                                        return (
+                                            <div style={{display:'flex', alignItems:'center', gap:'1.5rem', flex:1}}>
+                                                <ResponsiveContainer width={200} height={200}>
+                                                    <PieChart>
+                                                        <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={3} dataKey="value">
+                                                            {pieData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
+                                                        </Pie>
+                                                        <ReTooltip contentStyle={{ background: '#09090b', border: '1px solid #27272a', borderRadius: '8px' }} />
+                                                    </PieChart>
+                                                </ResponsiveContainer>
+                                                <div style={{display:'flex', flexDirection:'column', gap:'0.5rem', flex:1}}>
+                                                    {pieData.map(d => (
+                                                        <div key={d.name} style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:'0.5rem'}}>
+                                                            <div style={{display:'flex', alignItems:'center', gap:'0.5rem'}}>
+                                                                <div style={{width:10, height:10, borderRadius:'50%', background:d.fill, flexShrink:0}} />
+                                                                <span style={{fontSize:'0.78rem', color:'var(--text-secondary)'}}>{d.name}</span>
+                                                            </div>
+                                                            <span style={{fontWeight:800, fontFamily:'Outfit', color:d.fill, fontSize:'0.9rem'}}>{d.value}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
                                 <div className="glass-card chart-item">
                                     <h3>Risk Category Radar</h3>
-                                    <ResponsiveContainer width="100%" height={260}>
+                                    <ResponsiveContainer width="100%" height={240}>
                                         <RadarChart cx="50%" cy="50%" outerRadius="75%" data={radarData}>
                                             <PolarGrid stroke="rgba(255,255,255,0.1)" />
                                             <PolarAngleAxis dataKey="subject" tick={{ fill: '#a1a1aa', fontSize: 11 }} />
@@ -991,7 +1223,7 @@ function App() {
                                 </div>
                                 <div className="glass-card chart-item">
                                     <h3>Namespace Vulnerabilities</h3>
-                                    <ResponsiveContainer width="100%" height={260}>
+                                    <ResponsiveContainer width="100%" height={240}>
                                         <BarChart data={heatmap}>
                                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                                             <XAxis dataKey="namespace" stroke="#64748b" fontSize={11} />
@@ -1007,14 +1239,16 @@ function App() {
 
                     {/* Content Views */}
                     {activeTab !== 'dashboard' && (
-                        <div className="main-content-grid" style={{ gridTemplateColumns: (['compliance', 'monitoring', 'network', 'rbac', 'advisories'].includes(activeTab)) ? '1fr' : '1fr 350px' }}>
+                        <div className="main-content-grid" style={{ gridTemplateColumns: (['compliance', 'monitoring', 'network', 'rbac', 'advisories', 'logs', 'agent'].includes(activeTab)) ? '1fr' : '1fr 350px' }}>
                             <div className="glass-card visual-section" style={{ minHeight: '600px'}}>
-                                
+
                                 {activeTab === 'network' && renderNetworkMap()}
                                 {activeTab === 'rbac' && renderRBACGraph()}
                                 {activeTab === 'advisories' && renderAdvisories()}
                                 {activeTab === 'compliance' && renderCompliance()}
-                                {activeTab === "monitoring" && renderMonitoring()}
+                                {activeTab === 'monitoring' && renderMonitoring()}
+                                {activeTab === 'logs' && renderLogs()}
+                                {activeTab === 'agent' && renderAgent()}
                                 {activeTab === 'inventory' && (
                                     <>
                                         <div className="sub-tabs-list">
@@ -1113,8 +1347,8 @@ function App() {
                                     </table>
                                 )}
 
-                                {/* Fallback for pods, policies, rbac, logs where lists apply similarly */}
-                                {['pods', 'policies', 'rbac', 'logs'].includes(activeTab) && (
+                                {/* Fallback for pods, policies, rbac where lists apply similarly */}
+                                {['pods', 'policies', 'rbac'].includes(activeTab) && (
                                     <table className="ent-table">
                                         <thead><tr><th>Resource</th><th>Risk Status</th><th>Security Findings</th></tr></thead>
                                         <tbody>
@@ -1156,7 +1390,7 @@ function App() {
                             </div>
 
                             {/* Persistent Right Side Console (Only when not full-width view) */}
-                            {activeTab !== 'compliance' && activeTab !== 'monitoring' && (
+                            {!['compliance', 'monitoring', 'logs', 'agent', 'network', 'rbac', 'advisories'].includes(activeTab) && (
                                 <div className="console-section">
                                     <div className="console-header">Strategic Priorities</div>
                                     <div style={{marginBottom: '1rem'}}>

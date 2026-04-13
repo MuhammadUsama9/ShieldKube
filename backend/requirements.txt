@@ -5,3 +5,5 @@ pydantic
 python-dotenv
 requests
 schedule
+scikit-learn
+joblib

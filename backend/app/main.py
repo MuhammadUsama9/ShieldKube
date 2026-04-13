@@ -6,6 +6,7 @@ from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from .scanner import K8sScanner
 from .database import db
+from .ml_model import anomaly_detector
 
 app = FastAPI(title="Kubernetes Security Risk Dashboard API")
 
@@ -52,6 +53,8 @@ def bootstrap_dashboard(cluster_id: str = "local"):
             vulnerabilities = db.get_telemetry(cluster_id, "vulnerabilities", {})
             radar = db.get_telemetry(cluster_id, "radar", [])
         
+        ml_anomaly = get_ml_anomaly(cluster_id)
+        
         print(f"[{time.strftime('%H:%M:%S')}] BOOTSTRAP: Summary fetched")
         
         return {
@@ -59,7 +62,8 @@ def bootstrap_dashboard(cluster_id: str = "local"):
             "summary": summary,
             "pods": pods,
             "vulnerabilities": vulnerabilities,
-            "radar": radar
+            "radar": radar,
+            "ml_anomaly": ml_anomaly
         }
     except Exception as e:
         print(f"[{time.strftime('%H:%M:%S')}] BOOTSTRAP ERROR: {e}")
@@ -116,6 +120,10 @@ async def sync_agent_data(cluster_id: str, request: Request):
     for dt in data_types:
         if dt in payload:
             db.save_telemetry(cluster_id, dt, payload[dt])
+            
+    # 4. Continuous Machine Learning
+    ml_insight = anomaly_detector.process_telemetry(cluster_id, payload)
+    db.save_telemetry(cluster_id, "ml_anomaly", ml_insight)
     
     print(f"[{time.strftime('%H:%M:%S')}] Enterprise Sync: Received telemetry from {cluster_id}")
     return {"status": "success", "timestamp": time.time()}
@@ -333,6 +341,17 @@ def get_secrets(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_secrets()
     return db.get_telemetry(cluster_id, "secrets", [])
 
+@app.get("/api/ml/anomaly")
+def get_ml_anomaly(cluster_id: str = "local"):
+    if cluster_id == "local":
+        payload = {
+            "summary": get_summary("local"),
+            "metrics": get_metrics("local")
+        }
+        return anomaly_detector.process_telemetry("local", payload)
+    
+    return db.get_telemetry(cluster_id, "ml_anomaly", {"is_anomaly": False, "anomaly_score": 0.0, "status": "Learning"})
+
 @app.post("/api/remediate")
 async def remediate(data: dict):
     cluster_id = data.get("cluster_id", "local")
@@ -384,25 +403,116 @@ def get_rbac_graph(cluster_id: str = "local"):
 
 @app.get("/api/advisories")
 def get_advisories(cluster_id: str = "local"):
-    """Generates actionable security advisories."""
+    """Generates actionable security advisories from real risk data."""
     if cluster_id == "local":
         pods = scanner.scan_pods()
+        rbac = scanner.scan_rbac()
         vulns = scanner.scan_vulnerabilities()
     else:
         pods = db.get_telemetry(cluster_id, "pods", [])
+        rbac = db.get_telemetry(cluster_id, "rbac", [])
         vulns = db.get_telemetry(cluster_id, "vulnerabilities", {})
-        
+
     advisories = []
-    for p in pods:
-        if p.get("status") == "Running" and "security-critical" in p.get("name", ""): # Simulating finding
-             advisories.append({
-                "id": f"ADV-PRIV-{p['name']}",
-                "title": "Privileged Container Risk",
-                "severity": "High",
-                "target": p["name"],
-                "finding": "Workload is running with sensitive host mounts.",
-                "remediation": "Remove hostPath mounts and use persistent volume claims."
-            })
+    seen_ids = set()
+
+    REMEDIATION_MAP = {
+        "PrivilegedContainer": (
+            "Privileged Container Detected",
+            "Critical",
+            "Container is running with privileged=true, granting full host kernel access.",
+            "Set securityContext.privileged: false. Use specific capabilities (e.g. NET_ADMIN) if needed."
+        ),
+        "RunAsRoot": (
+            "Workload Running as Root",
+            "High",
+            "Container UID is 0 (root), violating least-privilege principle.",
+            "Add securityContext.runAsNonRoot: true and runAsUser: 1000 to the pod spec."
+        ),
+        "HostNetworkAccess": (
+            "Host Network Exposure",
+            "High",
+            "Pod uses hostNetwork: true, exposing the node's network stack.",
+            "Disable hostNetwork unless absolutely required. Use a Service with NodePort or LoadBalancer instead."
+        ),
+        "NoReadOnlyRootFilesystem": (
+            "Mutable Root Filesystem",
+            "Medium",
+            "Container root filesystem is writable, enabling persistence after compromise.",
+            "Set securityContext.readOnlyRootFilesystem: true and use emptyDir volumes for temp writes."
+        ),
+        "WildcardVerbs": (
+            "RBAC Wildcard Permissions",
+            "Critical",
+            "Service account has wildcard (*) verbs, granting unrestricted API access.",
+            "Replace wildcard verbs with only the specific verbs required (get, list, watch)."
+        ),
+        "WildcardResources": (
+            "RBAC Wildcard Resources",
+            "High",
+            "Service account can act on all (*) Kubernetes resources.",
+            "Scope RBAC rules to specific resources (pods, configmaps) needed by the workload."
+        ),
+    }
+
+    # Pod-based advisories
+    for pod in pods:
+        for risk in pod.get("risks", []):
+            risk_type = risk.get("type", "")
+            adv_id = f"ADV-POD-{risk_type}-{pod['name']}"
+            if adv_id in seen_ids:
+                continue
+            seen_ids.add(adv_id)
+            if risk_type in REMEDIATION_MAP:
+                title, severity, finding, remediation = REMEDIATION_MAP[risk_type]
+                advisories.append({
+                    "id": adv_id,
+                    "title": title,
+                    "severity": severity,
+                    "target": f"{pod['namespace']}/{pod['name']}",
+                    "finding": finding,
+                    "remediation": remediation
+                })
+
+    # RBAC-based advisories
+    for r in rbac:
+        for risk in r.get("risks", []):
+            risk_type = risk.get("type", "")
+            adv_id = f"ADV-RBAC-{risk_type}-{r['name']}"
+            if adv_id in seen_ids:
+                continue
+            seen_ids.add(adv_id)
+            if risk_type in REMEDIATION_MAP:
+                title, severity, finding, remediation = REMEDIATION_MAP[risk_type]
+                advisories.append({
+                    "id": adv_id,
+                    "title": title,
+                    "severity": severity,
+                    "target": f"{r.get('namespace', 'cluster-wide')}/{r['name']}",
+                    "finding": finding,
+                    "remediation": remediation
+                })
+
+    # CVE-based advisories (top criticals only)
+    all_vulns = [v for vlist in vulns.values() for v in vlist]
+    crit_vulns = [v for v in all_vulns if v.get("severity") in ("Critical", "High")][:5]
+    for v in crit_vulns:
+        adv_id = f"ADV-CVE-{v.get('id', v.get('cve_id', 'UNKNOWN'))}-{v.get('target', '')}"
+        if adv_id in seen_ids:
+            continue
+        seen_ids.add(adv_id)
+        advisories.append({
+            "id": adv_id,
+            "title": f"Unpatched CVE: {v.get('id', v.get('cve_id', 'Unknown'))}",
+            "severity": v.get("severity", "High"),
+            "target": v.get("target", "Unknown"),
+            "finding": v.get("description", f"Known vulnerability in image {v.get('image', 'unknown')}."),
+            "remediation": f"Update the image to a patched version. Fixed in: {v.get('fixed_version', 'Check vendor advisory')}."
+        })
+
+    # Sort by severity
+    sev_order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+    advisories.sort(key=lambda a: sev_order.get(a["severity"], 99))
     return advisories
 
 if __name__ == "__main__":
