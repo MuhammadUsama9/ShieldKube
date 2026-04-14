@@ -121,7 +121,17 @@ async def sync_agent_data(cluster_id: str, request: Request):
         if dt in payload:
             db.save_telemetry(cluster_id, dt, payload[dt])
             
-    # 4. Continuous Machine Learning
+    # 4. Save Snapshot for Time Machine (If not already saved recently)
+    # We'll save a full bundle of what was just synced
+    snapshot_data = {
+        "summary": payload.get("summary", {}),
+        "events": payload.get("events", []),
+        "ml_anomaly": payload.get("ml_anomaly", {}),
+        "pods": payload.get("pods", [])
+    }
+    db.save_snapshot(cluster_id, snapshot_data)
+            
+    # 5. Continuous Machine Learning
     ml_insight = anomaly_detector.process_telemetry(cluster_id, payload)
     db.save_telemetry(cluster_id, "ml_anomaly", ml_insight)
     
@@ -569,6 +579,42 @@ async def validate_webhook(request: Request):
                 "status": {"message": f"ShieldKube webhook error bypassed: {e}"}
             }
         }
+
+@app.get("/api/history/timeline")
+def get_history_timeline(cluster_id: str = "local"):
+    return db.get_history_timeline(cluster_id)
+
+@app.get("/api/history/snapshot")
+def get_snapshot(cluster_id: str = "local", timestamp: float = Query(...)):
+    snapshot = db.get_snapshot(cluster_id, timestamp)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    return snapshot
+
+# Periodic snapshotting for local cluster
+from threading import Timer
+
+def capture_local_snapshot():
+    try:
+        print(f"[{time.strftime('%H:%M:%S')}] TimeMachine: Capturing local snapshot...")
+        summary = get_summary("local")
+        # We only snapshot critical metrics for history to save space
+        snapshot = {
+            "summary": summary,
+            "events": scanner.scan_events()[:20],
+            "ml_anomaly": get_ml_anomaly("local"),
+            "pods": scanner.scan_pods()[:10]
+        }
+        db.save_snapshot("local", snapshot)
+    except Exception as e:
+        print(f"TimeMachine Error: {e}")
+    finally:
+        # Schedule next capture in 60 seconds
+        Timer(60.0, capture_local_snapshot).start()
+
+@app.on_event("startup")
+def startup_event():
+    Timer(5.0, capture_local_snapshot).start()
 
 if __name__ == "__main__":
     import uvicorn

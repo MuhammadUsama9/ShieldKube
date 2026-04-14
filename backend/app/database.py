@@ -55,6 +55,16 @@ class ShieldKubeDB:
         """)
         # Ensure local cluster entry
         cursor.execute("INSERT OR IGNORE INTO clusters (id, name, is_local) VALUES ('local', 'Local Cluster', 1)")
+        
+        # Telemetry snapshots for Time Machine (historical state bundles)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS telemetry_snapshots (
+                cluster_id TEXT,
+                timestamp REAL,
+                data_json TEXT,
+                PRIMARY KEY (cluster_id, timestamp)
+            )
+        """)
         self.conn.commit()
 
     def update_cluster(self, cluster_id: str, name: str, api_key: Optional[str] = None):
@@ -100,7 +110,40 @@ class ShieldKubeDB:
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM clusters WHERE id = ?", (cluster_id,))
         cursor.execute("DELETE FROM telemetry WHERE cluster_id = ?", (cluster_id,))
+        cursor.execute("DELETE FROM telemetry_snapshots WHERE cluster_id = ?", (cluster_id,))
         self.conn.commit()
+
+    def save_snapshot(self, cluster_id: str, data: Any):
+        cursor = self.conn.cursor()
+        ts = time.time()
+        cursor.execute(
+            "INSERT INTO telemetry_snapshots (cluster_id, timestamp, data_json) VALUES (?, ?, ?)",
+            (cluster_id, ts, json.dumps(data))
+        )
+        # Pruning: Keep only last 24 hours of snapshots (86400 seconds)
+        cursor.execute(
+            "DELETE FROM telemetry_snapshots WHERE cluster_id = ? AND timestamp < ?",
+            (cluster_id, ts - 86400)
+        )
+        self.conn.commit()
+        return ts
+
+    def get_history_timeline(self, cluster_id: str, limit: int = 100) -> List[float]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT timestamp FROM telemetry_snapshots WHERE cluster_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (cluster_id, limit)
+        )
+        return [row["timestamp"] for row in cursor.fetchall()]
+
+    def get_snapshot(self, cluster_id: str, timestamp: float) -> Optional[Dict]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT data_json FROM telemetry_snapshots WHERE cluster_id = ? AND timestamp = ?",
+            (cluster_id, timestamp)
+        )
+        row = cursor.fetchone()
+        return json.loads(row["data_json"]) if row else None
 
 # Global DB instance
 db = ShieldKubeDB()

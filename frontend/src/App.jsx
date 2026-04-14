@@ -44,6 +44,12 @@ function App() {
     const [rbacGraph, setRbacGraph] = useState({ nodes: [], links: [] })
     const [advisories, setAdvisories] = useState([])
     const [mlAnomaly, setMlAnomaly] = useState(null)
+    
+    // Time Machine State
+    const [isHistoryMode, setIsHistoryMode] = useState(false)
+    const [historyTimeline, setHistoryTimeline] = useState([])
+    const [selectedHistoryIndex, setSelectedHistoryIndex] = useState(0)
+    const [historicalData, setHistoricalData] = useState(null)
 
     const TAB_LABELS = {
         dashboard: 'Dashboard', pods: 'Pod Security', policies: 'Network Policies',
@@ -73,6 +79,7 @@ function App() {
     const [error, setError] = useState(null);
 
     const fetchData = async () => {
+        if (isHistoryMode) return; // Don't fetch live data in history mode
         setLoading(true);
         setError(null);
         
@@ -199,9 +206,44 @@ function App() {
 
     useEffect(() => {
         fetchData()
-        const interval = setInterval(fetchData, 8000)
-        return () => clearInterval(interval)
-    }, [activeCluster])
+        if (!isHistoryMode) {
+            const interval = setInterval(fetchData, 8000)
+            return () => clearInterval(interval)
+        }
+    }, [activeCluster, isHistoryMode])
+
+    // Fetch Timeline when entering history mode
+    useEffect(() => {
+        if (isHistoryMode) {
+            fetch(`${API_BASE}/api/history/timeline?cluster_id=${activeCluster}`)
+                .then(r => r.json())
+                .then(data => {
+                    setHistoryTimeline(data);
+                    if (data.length > 0) {
+                        setSelectedHistoryIndex(0);
+                        fetchSnapshot(data[0]);
+                    }
+                });
+        }
+    }, [isHistoryMode, activeCluster])
+
+    const fetchSnapshot = async (ts) => {
+        setLoading(true);
+        try {
+            const r = await fetch(`${API_BASE}/api/history/snapshot?cluster_id=${activeCluster}&timestamp=${ts}`);
+            const data = await r.json();
+            setHistoricalData(data);
+            // Apply historical state to dashboard
+            setSummary(data.summary);
+            setEvents(data.events || []);
+            setPods(data.pods || []);
+            setMlAnomaly(data.ml_anomaly || null);
+        } catch (e) {
+            setNotification({type: 'error', msg: 'Failed to load snapshot'});
+        } finally {
+            setLoading(false);
+        }
+    }
 
     // UI Components
     const SeverityBadge = ({ level }) => {
@@ -1069,6 +1111,50 @@ function App() {
                         )}
                     </div>
                 </header>
+
+                {/* Threat Time Machine Scrubber */}
+                <div style={{
+                    padding: '0.75rem 2.5rem', 
+                    background: isHistoryMode ? 'rgba(234,179,8,0.05)' : 'rgba(0,0,0,0.2)',
+                    borderBottom: '1px solid var(--border-subtle)',
+                    display: 'flex', alignItems: 'center', gap: '1.5rem',
+                    transition: 'all 0.3s'
+                }}>
+                    <button 
+                        onClick={() => setIsHistoryMode(!isHistoryMode)}
+                        className={`glass-button ${isHistoryMode ? 'primary' : 'secondary'}`}
+                        style={{minWidth: '160px', background: isHistoryMode ? 'var(--risk-med)' : '', color: isHistoryMode ? '#000' : ''}}
+                    >
+                        {isHistoryMode ? '⏹ Exit Time Machine' : '🕒 Threat Time Machine'}
+                    </button>
+
+                    {isHistoryMode ? (
+                        <div style={{flex: 1, display: 'flex', alignItems: 'center', gap: '1.5rem'}}>
+                            <input 
+                                type="range" 
+                                min="0" 
+                                max={Math.max(0, historyTimeline.length - 1)} 
+                                step="1"
+                                value={selectedHistoryIndex}
+                                onChange={(e) => {
+                                    const idx = parseInt(e.target.value);
+                                    setSelectedHistoryIndex(idx);
+                                    fetchSnapshot(historyTimeline[idx]);
+                                }}
+                                style={{flex: 1, accentColor: 'var(--risk-med)'}}
+                            />
+                            <div style={{minWidth: '220px', fontFamily: 'Fira Code', fontSize: '0.85rem', color: 'var(--risk-med)', fontWeight: 700}}>
+                                {historyTimeline[selectedHistoryIndex] ? new Date(historyTimeline[selectedHistoryIndex] * 1000).toLocaleString() : 'No History Found'}
+                            </div>
+                            <div className="severity-tag medium" style={{animation: 'pulse 2s infinite'}}>RETROSPECTIVE MODE</div>
+                        </div>
+                    ) : (
+                        <div style={{fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                            <span className="pulse-dot"></span> 
+                            Live Telemetry Stream Active · Point-in-time snapshots available every 60s
+                        </div>
+                    )}
+                </div>
 
                 {/* Dashboard / Content */}
                 <div className="content-wrapper">
