@@ -1,0 +1,17 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: shieldkube-validating-webhook
+webhooks:
+  - name: validate.shieldkube.local
+    rules:
+      - apiGroups:   [""]
+        apiVersions: ["v1"]
+        operations:  ["CREATE", "UPDATE"]
+        resources:   ["pods"]
+        scope:       "Namespaced"
+    clientConfig:
+      url: http://host.docker.internal:8000/api/webhooks/validate # Demo usage for local clusters
+    admissionReviewVersions: ["v1", "v1beta1"]
+    sideEffects: None
+    timeoutSeconds: 5

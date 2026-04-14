@@ -1,7 +1,7 @@
 import os
 import joblib
 import numpy as np
-from sklearn.linear_model import SGDOneClassSVM
+from sklearn.linear_model import SGDOneClassSVM, LinearRegression
 from sklearn.preprocessing import StandardScaler
 from typing import Dict, Any
 
@@ -13,6 +13,7 @@ class AnomalyDetector:
         self.model = SGDOneClassSVM(nu=0.1, random_state=42)
         self.scaler = StandardScaler()
         self.is_fitted = False
+        self.history = []
         
         self.load_model()
         
@@ -95,6 +96,27 @@ class AnomalyDetector:
         self.is_fitted = True
         self.save_model()
         
+        # Update rolling buffer
+        self.history.append(X_raw[0].tolist())
+        if len(self.history) > 20:
+            self.history.pop(0)
+
+        # Basic Forecasting
+        forecast = {"security_score": X_raw[0][0], "avg_cpu": X_raw[0][3]}
+        if len(self.history) >= 5:
+            seq = np.array(range(len(self.history))).reshape(-1, 1)
+            y_score = np.array([h[0] for h in self.history])
+            y_cpu = np.array([h[3] for h in self.history])
+            
+            lr_score = LinearRegression().fit(seq, y_score)
+            lr_cpu = LinearRegression().fit(seq, y_cpu)
+            
+            pred_score = min(100.0, max(0.0, float(lr_score.predict([[len(self.history) + 4]])[0])))
+            pred_cpu = max(0.0, float(lr_cpu.predict([[len(self.history) + 4]])[0]))
+            forecast["security_score"] = pred_score
+            forecast["avg_cpu"] = pred_cpu
+            
+        insight["forecast"] = forecast
         return insight
         
     def partial_update_scaler(self, X_raw: np.ndarray):

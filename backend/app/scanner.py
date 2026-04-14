@@ -395,7 +395,7 @@ class K8sScanner:
 
             # --- CIS 5.1: RBAC ---
             try:
-                cluster_roles = self.rbac_v1.list_cluster_role().items
+                cluster_roles = self.rbac_v1.list_cluster_role(_request_timeout=3).items
                 wildcard_roles = [r.metadata.name for r in cluster_roles if r.rules and any(
                     '*' in (rule.verbs or []) or '*' in (rule.resources or []) for rule in r.rules
                 )]
@@ -688,7 +688,7 @@ class K8sScanner:
             # Collect pod metrics
             pods_data = []
             try:
-                pod_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "pods")
+                pod_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "pods", _request_timeout=3)
                 for item in pod_metrics.get("items", []):
                     name = item["metadata"]["name"]
                     ns = item["metadata"]["namespace"]
@@ -708,7 +708,7 @@ class K8sScanner:
             # Collect node metrics with real capacities
             nodes_data = []
             try:
-                node_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
+                node_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes", _request_timeout=3)
                 for item in node_metrics.get("items", []):
                     name = item["metadata"]["name"]
                     cpu_used = self._parse_cpu(item["usage"]["cpu"])

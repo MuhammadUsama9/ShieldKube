@@ -1129,11 +1129,21 @@ function App() {
                                             </p>
                                         </div>
                                     </div>
-                                    <div style={{textAlign:'right'}}>
-                                        <div style={{fontSize:'0.75rem', letterSpacing:'0.05em', textTransform:'uppercase', color:'var(--text-secondary)'}}>Anomaly Probability</div>
-                                        <div style={{fontSize:'1.65rem', fontWeight:'900', color: mlAnomaly.is_anomaly ? '#ef4444' : mlAnomaly.status === 'Learning' ? '#94a3b8' : '#22c55e', fontFamily:'Outfit'}}>
-                                            {mlAnomaly.anomaly_score !== undefined ? `${(mlAnomaly.anomaly_score * 100).toFixed(1)}%` : 'CALC'} 
-                                            <span style={{fontSize:'0.75rem', fontWeight:'normal', opacity:0.7, marginLeft:'5px'}}> / model: SGD</span>
+                                    <div style={{display:'flex', gap:'2rem', textAlign:'right'}}>
+                                        {mlAnomaly.forecast && (
+                                            <div>
+                                                <div style={{fontSize:'0.75rem', letterSpacing:'0.05em', textTransform:'uppercase', color:'var(--text-secondary)'}}>+5m Proj. Score</div>
+                                                <div style={{fontSize:'1.65rem', fontWeight:'900', color: mlAnomaly.forecast.security_score < 70 ? 'var(--risk-crit)' : 'var(--risk-low)', fontFamily:'Outfit'}}>
+                                                    {mlAnomaly.forecast.security_score.toFixed(1)}%
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div>
+                                            <div style={{fontSize:'0.75rem', letterSpacing:'0.05em', textTransform:'uppercase', color:'var(--text-secondary)'}}>Anomaly Probability</div>
+                                            <div style={{fontSize:'1.65rem', fontWeight:'900', color: mlAnomaly.is_anomaly ? '#ef4444' : mlAnomaly.status === 'Learning' ? '#94a3b8' : '#22c55e', fontFamily:'Outfit'}}>
+                                                {mlAnomaly.anomaly_score !== undefined ? `${(mlAnomaly.anomaly_score * 100).toFixed(1)}%` : 'CALC'} 
+                                                <span style={{fontSize:'0.75rem', fontWeight:'normal', opacity:0.7, marginLeft:'5px'}}> / model: SGD</span>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>

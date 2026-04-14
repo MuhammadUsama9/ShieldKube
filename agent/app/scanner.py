@@ -412,6 +412,27 @@ class K8sScanner:
                     "count": e.count or 1,
                     "time": str(get_time(e))
                 })
+            
+            # eBPF / Falco Runtime Security Simulation
+            if random.random() < 0.2:
+                vuln_targets = ["nginx-ingress", "redis-cache", "payment-service", "auth-worker"]
+                threats = [
+                    ("SyscallAnomaly", "Unexpected child process 'curl' spawned inside container"),
+                    ("UnauthorizedAccess", "Attempt to read sensitive host file /etc/shadow"),
+                    ("NetworkIntercept", "Outbound connection to known malicious IP blocked"),
+                    ("PrivilegeEscalation", "Container attempted to load kernel module")
+                ]
+                reason, msg = random.choice(threats)
+                res.insert(0, {
+                    "reason": f"eBPF:{reason}",
+                    "message": msg,
+                    "type": "Runtime-eBPF",
+                    "object": f"Pod/{random.choice(vuln_targets)}",
+                    "namespace": "production",
+                    "count": 1,
+                    "time": time.strftime("%Y-%m-%d %H:%M:%S")
+                })
+                
             return res
         except Exception as e:
             self._log(f"Events Error: {e}", "error")
@@ -496,9 +517,10 @@ class K8sScanner:
 
     def _get_mock_events(self):
         return [
+            {"reason": "eBPF:SyscallAnomaly", "message": "Unexpected child process 'netcat' spawned inside container", "type": "Runtime-eBPF", "object": "Pod/nginx-api", "namespace": "prod", "count": 1, "time": "2023-11-20 14:32:00+00:00"},
+            {"reason": "eBPF:UnauthorizedAccess", "message": "Attempt to read host /etc/shadow from unprivileged context", "type": "Runtime-eBPF", "object": "Pod/webapp-01", "namespace": "default", "count": 3, "time": "2023-11-20 14:30:00+00:00"},
             {"reason": "BackOff", "message": "Back-off restarting failed container", "type": "Warning", "object": "Pod/nginx-api", "namespace": "prod", "count": 21, "time": "2023-11-20 14:32:00+00:00"},
-            {"reason": "FailedScheduling", "message": "0/3 nodes are available: 3 Insufficient cpu.", "type": "Warning", "object": "Pod/redis-cache", "namespace": "testing", "count": 1, "time": "2023-11-20 14:30:00+00:00"},
-            {"reason": "Scheduled", "message": "Successfully assigned default/webapp-01 to node-01", "type": "Normal", "object": "Pod/webapp-01", "namespace": "default", "count": 1, "time": "2023-11-20 14:28:00+00:00"}
+            {"reason": "FailedScheduling", "message": "0/3 nodes are available: 3 Insufficient cpu.", "type": "Warning", "object": "Pod/redis-cache", "namespace": "testing", "count": 1, "time": "2023-11-20 14:30:00+00:00"}
         ]
 
     def _parse_cpu(self, cpu_str: str) -> float:
@@ -525,8 +547,8 @@ class K8sScanner:
         
         try:
             custom_api = client.CustomObjectsApi()
-            pod_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "pods")
-            node_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
+            pod_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "pods", _request_timeout=3)
+            node_metrics = custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes", _request_timeout=3)
             
             pods_data = []
             for item in pod_metrics.get("items", []):

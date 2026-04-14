@@ -515,6 +515,61 @@ def get_advisories(cluster_id: str = "local"):
     advisories.sort(key=lambda a: sev_order.get(a["severity"], 99))
     return advisories
 
+@app.post("/api/webhooks/validate")
+async def validate_webhook(request: Request):
+    """
+    Kubernetes Admission Webhook endpoint.
+    Intercepts Pod creation requests and blocks them if they are overly privileged.
+    """
+    try:
+        data = await request.json()
+        req = data.get("request", {})
+        uid = req.get("uid")
+        obj = req.get("object", {})
+        kind = obj.get("kind", "")
+        
+        allowed = True
+        status_message = "Resource accepted by ShieldKube."
+        
+        if kind == "Pod":
+            # Heuristic 1: Block privileged pods
+            containers = obj.get("spec", {}).get("containers", [])
+            for c in containers:
+                if c.get("securityContext", {}).get("privileged", False):
+                    allowed = False
+                    status_message = f"ShieldKube Blocked: Container '{c.get('name')}' is requesting privileged access, which violates active security policy."
+                    break
+
+        res = {
+            "apiVersion": "admission.k8s.io/v1",
+            "kind": "AdmissionReview",
+            "response": {
+                "uid": uid,
+                "allowed": allowed,
+                "status": {
+                    "message": status_message
+                }
+            }
+        }
+        return res
+    except Exception as e:
+        print(f"[{time.strftime('%H:%M:%S')}] WEBHOOK ERROR: {e}")
+        # Return a safe allow if we fail to parse, to not break the cluster
+        uid = ""
+        try:
+            uid = data.get("request", {}).get("uid", "")
+        except:
+            pass
+        return {
+            "apiVersion": "admission.k8s.io/v1",
+            "kind": "AdmissionReview",
+            "response": {
+                "uid": uid,
+                "allowed": True,
+                "status": {"message": f"ShieldKube webhook error bypassed: {e}"}
+            }
+        }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
