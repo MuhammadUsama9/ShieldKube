@@ -994,7 +994,7 @@ function App() {
             {/* Premium Sidebar Component */}
             <aside className="sidebar">
                 <div className="brand-header">
-                    <div className="logo-icon"><span>SK</span></div>
+                    <div className="logo-icon" style={{animation: 'pulse-glow 3s infinite'}}><span>SK</span></div>
                     <div>
                         <h1>ShieldKube</h1>
                         <span className="version-tag">Enterprise v7.2</span>
