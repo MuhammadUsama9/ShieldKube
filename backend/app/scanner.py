@@ -386,12 +386,13 @@ class K8sScanner:
         return trends
 
     def scan_compliance(self):
-        self._log("Running CIS Compliance audit...")
+        self._log("Running deep cross-framework Compliance audit (CIS, NSA, NIST 800-53)...")
         if self.mock_mode: return self._get_mock_compliance()
         if not self.is_connected: return []
         try:
             controls_cis = []
             controls_nsa = []
+            controls_nist = []
 
             # --- CIS 5.1: RBAC ---
             try:
@@ -404,6 +405,13 @@ class K8sScanner:
                     "name": "Ensure cluster-admin role is restricted",
                     "status": "Warning" if wildcard_roles else "Passed",
                     "finding": f"ClusterRoles with wildcard permissions: {', '.join(wildcard_roles[:3]) or 'None'}"
+                })
+                # NIST AC-2: Account Management
+                controls_nist.append({
+                    "id": "AC-2",
+                    "name": "Account Management / Least Privilege",
+                    "status": "Warning" if wildcard_roles else "Passed",
+                    "finding": f"Privileged accounts detected: {len(wildcard_roles)} roles with wildcard access."
                 })
             except Exception:
                 controls_cis.append({"id": "CIS 5.1.1", "name": "Ensure cluster-admin role is restricted", "status": "Warning", "finding": "Could not audit ClusterRoles"})
@@ -421,6 +429,14 @@ class K8sScanner:
                     "status": "Failed" if privileged else "Passed",
                     "finding": f"Privileged pods: {', '.join(privileged[:3])}" if privileged else "No privileged pods found"
                 })
+                # NIST AC-6: Least Privilege
+                controls_nist.append({
+                    "id": "AC-6",
+                    "name": "Least Privilege / Privileged Access",
+                    "status": "Failed" if privileged else "Passed",
+                    "finding": f"{len(privileged)} pods running with full kernel privileges."
+                })
+
                 root_pods = [p.metadata.name for p in pods if any(
                     not (c.security_context and c.security_context.run_as_non_root)
                     for c in (p.spec.containers or [])
@@ -431,13 +447,20 @@ class K8sScanner:
                     "status": "Warning" if root_pods else "Passed",
                     "finding": f"{len(root_pods)} containers may run as root" if root_pods else "All containers set runAsNonRoot"
                 })
+                # NIST CM-6: Configuration Settings
+                controls_nist.append({
+                    "id": "CM-6",
+                    "name": "Configuration Settings / Hardening",
+                    "status": "Warning" if root_pods else "Passed",
+                    "finding": f"Non-hardened workloads: {len(root_pods)} containers lack runAsNonRoot."
+                })
             except Exception:
                 controls_cis.append({"id": "CIS 5.2.1", "name": "Minimize privileged containers", "status": "Warning", "finding": "Could not audit pod security"})
 
             # --- CIS 5.3: Network Policies ---
             try:
                 namespaces = self.v1.list_namespace(_request_timeout=3).items
-                policies = self.v1.list_network_policy_for_all_namespaces(_request_timeout=3).items
+                policies = self.networking_v1.list_network_policy_for_all_namespaces(_request_timeout=3).items
                 policy_ns = {p.metadata.namespace for p in policies}
                 unprotected = [ns.metadata.name for ns in namespaces if ns.metadata.name not in policy_ns and not ns.metadata.name.startswith("kube-")]
                 controls_cis.append({
@@ -446,36 +469,28 @@ class K8sScanner:
                     "status": "Failed" if unprotected else "Passed",
                     "finding": f"Namespaces without NetworkPolicy: {', '.join(unprotected[:3])}" if unprotected else "All namespaces have NetworkPolicies"
                 })
+                # NIST SC-7: Boundary Protection
+                controls_nist.append({
+                    "id": "SC-7",
+                    "name": "Boundary Protection / Network Isolation",
+                    "status": "Failed" if unprotected else "Passed",
+                    "finding": f"Unsegmented namespaces: {len(unprotected)} lack explicit ingress/egress rules."
+                })
             except Exception:
                 controls_cis.append({"id": "CIS 5.3.2", "name": "Ensure NetworkPolicy is configured", "status": "Warning", "finding": "Could not audit network policies"})
 
-            # --- CIS 5.4: Secrets Management ---
+            # --- NIST SI-2: Flaw Remediation (CVEs) ---
             try:
-                secrets = self.v1.list_secret_for_all_namespaces(_request_timeout=3).items
-                default_sa_secrets = [s.metadata.name for s in secrets if "default-token" in s.metadata.name]
-                controls_cis.append({
-                    "id": "CIS 5.4.1",
-                    "name": "Prefer using secrets as files vs env vars",
-                    "status": "Warning" if default_sa_secrets else "Passed",
-                    "finding": f"{len(default_sa_secrets)} default SA tokens found" if default_sa_secrets else "No default SA tokens found"
+                vulns = self.scan_vulnerabilities()
+                crit_vulns = sum(len([v for v in vlist if v.get("severity") == "Critical"]) for vlist in vulns.values())
+                controls_nist.append({
+                    "id": "SI-2",
+                    "name": "Flaw Remediation / Vulnerability Management",
+                    "status": "Failed" if crit_vulns > 0 else "Passed",
+                    "finding": f"Unpatched vulnerabilities: {crit_vulns} critical CVEs detected in environment."
                 })
             except Exception:
-                controls_cis.append({"id": "CIS 5.4.1", "name": "Prefer using secrets as files", "status": "Warning", "finding": "Could not audit secrets"})
-
-            # --- CIS 5.6: Resource Limits ---
-            try:
-                deploys = self.apps_v1.list_deployment_for_all_namespaces(_request_timeout=3).items
-                no_limits = [d.metadata.name for d in deploys if d.spec.template.spec.containers and any(
-                    not c.resources or not c.resources.limits for c in d.spec.template.spec.containers
-                )]
-                controls_cis.append({
-                    "id": "CIS 5.6.1",
-                    "name": "Apply CPU and memory limits to containers",
-                    "status": "Failed" if no_limits else "Passed",
-                    "finding": f"{len(no_limits)} deployments missing resource limits" if no_limits else "All deployments have resource limits"
-                })
-            except Exception:
-                controls_cis.append({"id": "CIS 5.6.1", "name": "Apply CPU and memory limits", "status": "Warning", "finding": "Could not audit resource limits"})
+                pass
 
             # --- NSA Controls ---
             try:
@@ -514,6 +529,12 @@ class K8sScanner:
                     "controls": controls_cis
                 },
                 {
+                    "framework": "NIST 800-53 Rev 5",
+                    "description": "Security and Privacy Controls for Information Systems and Organizations",
+                    "score": score(controls_nist),
+                    "controls": controls_nist
+                },
+                {
                     "framework": "NSA/CISA Kubernetes Hardening Guide",
                     "description": "US National Security Agency Kubernetes hardening recommendations",
                     "score": score(controls_nsa),
@@ -523,6 +544,140 @@ class K8sScanner:
         except Exception as e:
             self._log(f"Compliance scan error: {e}", "error")
             return []
+
+    def map_to_mitre_attack(self) -> Dict[str, List[Dict]]:
+        """Maps cluster-wide findings to the MITRE ATT&CK Matrix for Enterprise / Containers."""
+        self._log("Strategic Intelligence: Mapping risks to MITRE ATT&CK Matrix...")
+        
+        matrix = {
+            "Initial Access": [],
+            "Execution": [],
+            "Persistence": [],
+            "Privilege Escalation": [],
+            "Defense Evasion": [],
+            "Credential Access": [],
+            "Lateral Movement": [],
+            "Discovery": [],
+            "Collection": [],
+            "Command and Control": [],
+            "Impact": []
+        }
+        
+        # 1. Fetch source data
+        pods = self.scan_pods()
+        rbac = self.scan_rbac()
+        policies = self.scan_network_policies()
+        vulns = self.scan_vulnerabilities()
+        ebpf_events = self.scan_ebpf_events()
+        
+        # 2. Map Pod Security Risks
+        for p in pods:
+            for r in p.get("risks", []):
+                tactic = r.get("mitre", {}).get("tactic", "Impact")
+                if tactic in matrix:
+                    matrix[tactic].append({
+                        "name": r["type"],
+                        "target": p["name"],
+                        "id": r.get("mitre", {}).get("id", "T1611"),
+                        "severity": p["severity"]
+                    })
+        
+        # 3. Map RBAC Risks
+        for r in rbac:
+            for risk in r.get("risks", []):
+                matrix["Privilege Escalation"].append({
+                    "name": risk["type"],
+                    "target": r["name"],
+                    "id": "T1548",
+                    "severity": r["severity"]
+                })
+        
+        # 4. Map Network Risks
+        for p in policies:
+            for r in p.get("risks", []):
+                matrix["Lateral Movement"].append({
+                    "name": r["type"],
+                    "target": p["name"],
+                    "id": "T1557",
+                    "severity": p["severity"]
+                })
+        
+        # 5. Map eBPF Events (Realtime threats)
+        for e in ebpf_events:
+            tactic = e.get("mitre", {}).get("tactic", "Impact")
+            if tactic in matrix:
+                matrix[tactic].append({
+                    "name": e["detail"],
+                    "target": e["comm"],
+                    "id": e.get("mitre", {}).get("id", "T1055"),
+                    "severity": e["severity"]
+                })
+
+        return matrix
+
+    def generate_ai_insight(self, risk_type: str, resource_name: str) -> Dict[str, Any]:
+        """Provides an explainable-AI narrative and triage for a specific security risk."""
+        self._log(f"AI Security Analyst: Analyzing risk '{risk_type}' for {resource_name}...")
+        
+        # In a real enterprise app, this would call an LLM (vertex-ai, openai)
+        # Here we use a high-fidelity template engine to simulate advanced AI reasoning.
+        
+        TEMPLATES: Dict[str, Dict[str, Any]] = {
+            "PrivilegedContainer": {
+                "summary": "Critical kernel exposure via pod 'process' escalation.",
+                "analysis": f"The pod `{resource_name}` is configured with `privileged: true`. This bypasses all container isolation layers, allowing the process to access any host device and potentially escape to the node. This is a common entry point for container breakout attacks.",
+                "remediation": "Disable `privileged: true`. If hardware access is required, use `securityContext.capabilities` to grant specific permissions like `CAP_NET_ADMIN` or `CAP_SYS_TIME`.",
+                "impact": "Node-level compromise, lateral movement across the cluster."
+            },
+            "RBACWildcard": {
+                "summary": "Over-privileged service account detected.",
+                "analysis": f"The ClusterRole associated with `{resource_name}` uses wildcard `*` permissions for verbs or resources. This violates the principle of Least Privilege and allows an attacker who compromises this namespace to perform any action on the cluster.",
+                "remediation": "Audit the role's usage and replace wildcards with specific resources (e.g., `pods`, `services`) and verbs (e.g., `get`, `list`).",
+                "impact": "Full cluster administrative control bypass."
+            },
+            "ImageVulnerability": {
+                "summary": "Known exploit path in container dependency.",
+                "analysis": f"The image used by `{resource_name}` contains critical CVEs (e.g., Looney Tunables or HTTP/2 Rapid Reset). These vulnerabilities can be exploited to trigger buffer overflows or denial-of-service and in some cases, remote code execution.",
+                "remediation": "Update the base image or specific package to the fixed version specified in the vulnerability report.",
+                "impact": "Unauthorized access, data exfiltration, or service disruption."
+            }
+        }
+        
+        default: Dict[str, Any] = {
+            "summary": f"Standard security risk: {risk_type}",
+            "analysis": f"This risk indicates a configuration that deviates from security best practices for resource `{resource_name}`.",
+            "remediation": "Review the configuration and apply hardening according to the ShieldKube compliance report.",
+            "impact": "Potential exposure of internal cluster resources."
+        }
+        
+        insight = TEMPLATES.get(risk_type, default).copy()
+        insight["risk_id"] = f"AI-{random.randint(1000, 9999)}"
+        insight["confidence_score"] = 0.95 if risk_type in TEMPLATES else 0.75
+        return insight
+
+    def get_sbom(self, resource_name: str) -> Dict[str, Any]:
+        """Generates a mock CycloneDX SBOM for the specified container image/resource."""
+        self._log(f"SBOM Explorer: Retrieving bill of materials for {resource_name}...")
+        
+        # Simulate a manifest for common images
+        return {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.4",
+            "metadata": {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "component": {
+                    "name": resource_name,
+                    "version": "latest",
+                    "type": "container"
+                }
+            },
+            "components": [
+                {"name": "openssl", "version": "3.0.8", "licenses": ["Apache-2.0"], "purl": f"pkg:alpine/openssl@3.0.8"},
+                {"name": "zlib", "version": "1.2.13", "licenses": ["Zlib"], "purl": f"pkg:alpine/zlib@1.2.13"},
+                {"name": "busybox", "version": "1.36.0", "licenses": ["GPL-2.0"], "purl": f"pkg:alpine/busybox@1.36.0"},
+                {"name": "libc6", "version": "2.36-9", "licenses": ["LGPL-2.1"], "purl": f"pkg:debian/libc6@2.36-9"}
+            ]
+        }
 
 
 
@@ -604,7 +759,9 @@ class K8sScanner:
         return [
             {"name": "app-config", "namespace": "prod", "kind": "ConfigMap", "keys": ["DB_HOST", "DB_PASSWORD"], "severity": "Critical", "risks": [{"type": "HardcodedSecret", "msg": "ConfigMap contains potential hardcoded secret in key: DB_PASSWORD", "severity": "Critical"}]},
             {"name": "test-api-token", "namespace": "dev", "kind": "Secret", "keys": ["token"], "severity": "Medium", "risks": [{"type": "WeakNaming", "msg": "Secret 'test-api-token' has a weak or non-production naming convention.", "severity": "Medium"}]},
-            {"name": "tls-certs", "namespace": "default", "kind": "Secret", "keys": ["tls.crt", "tls.key"], "severity": "Low", "risks": []}
+            {"name": "tls-certs", "namespace": "default", "kind": "Secret", "keys": ["tls.crt", "tls.key"], "severity": "Low", "risks": []},
+            {"name": "oauth-client-credentials", "namespace": "auth", "kind": "Secret", "keys": ["client_id", "client_secret"], "severity": "Critical", "risks": [{"type": "HardcodedSecret", "msg": "Secret 'oauth-client-credentials' contains OAuth client_secret — rotate and use Vault or IRSA.", "severity": "Critical"}]},
+            {"name": "jwt-signing-key", "namespace": "api-gateway", "kind": "Secret", "keys": ["jwt_secret", "refresh_secret"], "severity": "Critical", "risks": [{"type": "HardcodedSecret", "msg": "JWT signing key stored as plaintext Kubernetes Secret — prefer external secret manager (AWS Secrets Manager, Vault).", "severity": "Critical"}]}
         ]
 
     def _get_mock_compliance(self):
@@ -835,18 +992,53 @@ class K8sScanner:
                     "mitre": {"tactic": "Persistence", "id": "T1499"}
                 })
 
-            # Capabilities
+            # CapabilityEscalation: block dangerous added caps
+            DANGEROUS_CAPS = {'SYS_ADMIN', 'NET_ADMIN', 'SYS_PTRACE', 'SYS_MODULE', 'ALL'}
             if c.security_context and c.security_context.capabilities:
-                add = c.security_context.capabilities.add or []
-                if "SYS_ADMIN" in add or "ALL" in add:
+                added_caps = set(c.security_context.capabilities.add or [])
+                hit_caps = added_caps & DANGEROUS_CAPS
+                if hit_caps:
                     risks.append({
-                        "type": "DangerousCapabilities", 
-                        "msg": f"Dangerous capabilities in '{c.name}'.", 
-                        "cis": "5.2.1", 
-                        "category": "Runtime", 
-                        "patch": "capabilities: {drop: ['ALL']}",
+                        "type": "CapabilityEscalation",
+                        "msg": f"Container '{c.name}' adds dangerous capabilities: {', '.join(hit_caps)}.",
+                        "cis": "5.2.1",
+                        "category": "Runtime",
+                        "patch": f"capabilities: {{drop: ['ALL'], add: [<only needed>]}}",
                         "mitre": {"tactic": "Privilege Escalation", "id": "T1611"}
                     })
+
+            # NoLivenessProbe
+            if not c.liveness_probe:
+                risks.append({
+                    "type": "NoLivenessProbe",
+                    "msg": f"Container '{c.name}' has no livenessProbe defined.",
+                    "cis": "5.2.7",
+                    "category": "Runtime",
+                    "patch": "livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 30}",
+                    "mitre": {"tactic": "Defense Evasion", "id": "T1562"}
+                })
+
+            # NoReadinessProbe
+            if not c.readiness_probe:
+                risks.append({
+                    "type": "NoReadinessProbe",
+                    "msg": f"Container '{c.name}' has no readinessProbe defined.",
+                    "cis": "5.2.7",
+                    "category": "Runtime",
+                    "patch": "readinessProbe: {httpGet: {path: /ready, port: 8080}, initialDelaySeconds: 10}",
+                    "mitre": {"tactic": "Defense Evasion", "id": "T1562"}
+                })
+
+            # UntrustedRegistry
+            if not any(c.image.startswith(reg) for reg in TRUSTED_REGISTRIES):
+                risks.append({
+                    "type": "UntrustedRegistry",
+                    "msg": f"Image '{c.image.split(':')[0]}' is not from a trusted registry ({', '.join(TRUSTED_REGISTRIES)}).",
+                    "cis": "5.4.1",
+                    "category": "Images",
+                    "patch": f"image: gcr.io/your-project/{c.image.split('/')[-1]}",
+                    "mitre": {"tactic": "Supply Chain Compromise", "id": "T1195"}
+                })
 
             # Resource Limits
             if not c.resources or not c.resources.limits:
@@ -910,27 +1102,92 @@ class K8sScanner:
                 })
         return risks
 
+    def scan_ebpf_events(self) -> List[Dict[str, Any]]:
+        """Simulate eBPF-style kernel syscall events for the eBPF runtime threat monitor."""
+        self._log("eBPF Runtime Monitor: Scanning kernel events...")
+        import random
+        base_ts = time.time()
+        events = [
+            {
+                "event_type": "syscall",
+                "pid": random.randint(1000, 9999),
+                "comm": "nginx-api",
+                "syscall": "ptrace",
+                "severity": "Critical",
+                "detail": "Process attempted ptrace() — potential container escape vector.",
+                "timestamp": time.strftime("%H:%M:%S", time.localtime(base_ts - 12)),
+                "mitre": {"tactic": "Privilege Escalation", "id": "T1055"}
+            },
+            {
+                "event_type": "file_open",
+                "pid": random.randint(1000, 9999),
+                "comm": "redis-cache",
+                "syscall": "openat",
+                "severity": "High",
+                "detail": "Unexpected open of /etc/shadow — credential file access detected.",
+                "timestamp": time.strftime("%H:%M:%S", time.localtime(base_ts - 45)),
+                "mitre": {"tactic": "Credential Access", "id": "T1003"}
+            },
+            {
+                "event_type": "network",
+                "pid": random.randint(1000, 9999),
+                "comm": "webapp-01",
+                "syscall": "connect",
+                "severity": "Medium",
+                "detail": "Outbound connection to 185.220.101.45 (known Tor exit node).",
+                "timestamp": time.strftime("%H:%M:%S", time.localtime(base_ts - 90)),
+                "mitre": {"tactic": "Command and Control", "id": "T1090"}
+            },
+            {
+                "event_type": "module_load",
+                "pid": random.randint(1000, 9999),
+                "comm": "kworker",
+                "syscall": "init_module",
+                "severity": "Critical",
+                "detail": "Unexpected kernel module load — rootkit insertion attempt.",
+                "timestamp": time.strftime("%H:%M:%S", time.localtime(base_ts - 180)),
+                "mitre": {"tactic": "Defense Evasion", "id": "T1014"}
+            },
+            {
+                "event_type": "exec",
+                "pid": random.randint(1000, 9999),
+                "comm": "sh",
+                "syscall": "execve",
+                "severity": "High",
+                "detail": "Shell spawned inside container — possible reverse shell or interactive breakout.",
+                "timestamp": time.strftime("%H:%M:%S", time.localtime(base_ts - 300)),
+                "mitre": {"tactic": "Execution", "id": "T1059"}
+            }
+        ]
+        return events
+
     def _calculate_severity(self, risks):
         if not risks: return "Low"
-        if any(r["type"] == "Privileged" for r in risks): return "Critical"
+        if any(r["type"] in ("Privileged", "CapabilityEscalation") for r in risks): return "Critical"
         return "High" if len(risks) > 1 else "Medium"
 
     def _get_mock_pods(self):
         return [
             {"name": "nginx-api", "namespace": "prod", "severity": "Critical", "risks": [
                 {"type": "Privileged", "msg": "Privileged container: nginx", "cis": "5.2.2", "category": "Runtime", "patch": "privileged: false", "mitre": {"tactic": "Execution", "id": "T1611"}},
-                {"type": "RunAsRoot", "msg": "Container 'nginx' may run as root.", "cis": "5.2.6", "category": "Runtime", "patch": "runAsNonRoot: true", "mitre": {"tactic": "Privilege Escalation", "id": "T1548"}},
-                {"type": "SecretAsEnv", "msg": "Sensitive env var 'DB_PASSWORD' in 'nginx'.", "cis": "5.4.2", "category": "IAM", "patch": "valueFrom: {secretKeyRef: {...}}", "mitre": {"tactic": "Credential Access", "id": "T1552"}}
+                {"type": "CapabilityEscalation", "msg": "Container 'nginx' adds dangerous capabilities: SYS_ADMIN, NET_ADMIN.", "cis": "5.2.1", "category": "Runtime", "patch": "capabilities: {drop: ['ALL']}", "mitre": {"tactic": "Privilege Escalation", "id": "T1611"}},
+                {"type": "SecretAsEnv", "msg": "Sensitive env var 'DB_PASSWORD' in 'nginx'.", "cis": "5.4.2", "category": "IAM", "patch": "valueFrom: {secretKeyRef: {...}}", "mitre": {"tactic": "Credential Access", "id": "T1552"}},
+                {"type": "UntrustedRegistry", "msg": "Image 'nginx' is not from a trusted registry (gcr.io, quay.io, docker.io/library).", "cis": "5.4.1", "category": "Images", "patch": "image: gcr.io/your-project/nginx", "mitre": {"tactic": "Supply Chain Compromise", "id": "T1195"}}
             ]},
             {"name": "redis-cache", "namespace": "testing", "severity": "High", "risks": [
                 {"type": "ResourceLimits", "msg": "No resource limits for 'redis'.", "cis": "5.6.1", "category": "Runtime", "patch": "resources: {limits: {cpu: '500m', memory: '512Mi'}}", "mitre": {"tactic": "Impact", "id": "T1496"}},
-                {"type": "SAAutomount", "msg": "Service Account token is automounted.", "cis": "5.1.6", "category": "IAM", "patch": "automountServiceAccountToken: false", "mitre": {"tactic": "Credential Access", "id": "T1552"}},
-                {"type": "HostPort", "msg": "HostPort '6379' used in 'redis'.", "cis": "5.2.10", "category": "Network", "patch": "hostPort: null", "mitre": {"tactic": "Infiltration", "id": "T1567"}}
+                {"type": "NoLivenessProbe", "msg": "Container 'redis' has no livenessProbe defined.", "cis": "5.2.7", "category": "Runtime", "patch": "livenessProbe: {tcpSocket: {port: 6379}, initialDelaySeconds: 15}", "mitre": {"tactic": "Defense Evasion", "id": "T1562"}},
+                {"type": "NoReadinessProbe", "msg": "Container 'redis' has no readinessProbe defined.", "cis": "5.2.7", "category": "Runtime", "patch": "readinessProbe: {tcpSocket: {port: 6379}, initialDelaySeconds: 5}", "mitre": {"tactic": "Defense Evasion", "id": "T1562"}}
             ]},
             {"name": "webapp-01", "namespace": "default", "severity": "High", "risks": [
                 {"type": "LatestTag", "msg": "Container 'webapp' uses :latest tag.", "cis": "5.4.1", "category": "Images", "patch": "image: nginx:1.25", "mitre": {"tactic": "Initial Access", "id": "T1204"}},
                 {"type": "WritableRootFS", "msg": "Writable root filesystem in 'webapp'.", "cis": "5.2.8", "category": "Runtime", "patch": "readOnlyRootFilesystem: true", "mitre": {"tactic": "Persistence", "id": "T1499"}},
                 {"type": "NoSecurityProfile", "msg": "No AppArmor or Seccomp profile for 'webapp'.", "cis": "5.7.1", "category": "Runtime", "patch": "securityContext: {seccompProfile: {type: RuntimeDefault}}", "mitre": {"tactic": "Defense Evasion", "id": "T1562"}}
+            ]},
+            {"name": "ml-inference", "namespace": "ai", "severity": "Critical", "risks": [
+                {"type": "CapabilityEscalation", "msg": "Container 'ml-inference' adds dangerous capabilities: SYS_PTRACE.", "cis": "5.2.1", "category": "Runtime", "patch": "capabilities: {drop: ['ALL']}", "mitre": {"tactic": "Privilege Escalation", "id": "T1611"}},
+                {"type": "UntrustedRegistry", "msg": "Image 'ml-inference' is not from a trusted registry.", "cis": "5.4.1", "category": "Images", "patch": "image: gcr.io/your-project/ml-inference", "mitre": {"tactic": "Supply Chain Compromise", "id": "T1195"}},
+                {"type": "NoLivenessProbe", "msg": "Container 'ml-inference' has no livenessProbe defined.", "cis": "5.2.7", "category": "Runtime", "patch": "livenessProbe: {httpGet: {path: /healthz, port: 8080}}", "mitre": {"tactic": "Defense Evasion", "id": "T1562"}}
             ]}
         ]
 

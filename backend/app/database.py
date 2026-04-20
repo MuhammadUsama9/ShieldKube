@@ -113,20 +113,32 @@ class ShieldKubeDB:
         cursor.execute("DELETE FROM telemetry_snapshots WHERE cluster_id = ?", (cluster_id,))
         self.conn.commit()
 
-    def save_snapshot(self, cluster_id: str, data: Any):
+    def save_snapshot(self, cluster_id: str, data: Any, retention_hours: int = 24):
+        """Save a cluster state snapshot with configurable retention window."""
         cursor = self.conn.cursor()
         ts = time.time()
         cursor.execute(
             "INSERT INTO telemetry_snapshots (cluster_id, timestamp, data_json) VALUES (?, ?, ?)",
             (cluster_id, ts, json.dumps(data))
         )
-        # Pruning: Keep only last 24 hours of snapshots (86400 seconds)
+        # Pruning: enforce retention window (default 24h)
+        retention_seconds = retention_hours * 3600
         cursor.execute(
             "DELETE FROM telemetry_snapshots WHERE cluster_id = ? AND timestamp < ?",
-            (cluster_id, ts - 86400)
+            (cluster_id, ts - retention_seconds)
         )
         self.conn.commit()
         return ts
+
+    def get_snapshot_count(self, cluster_id: str) -> int:
+        """Return the number of stored snapshots for a cluster."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM telemetry_snapshots WHERE cluster_id = ?",
+            (cluster_id,)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else 0
 
     def get_history_timeline(self, cluster_id: str, limit: int = 100) -> List[float]:
         cursor = self.conn.cursor()

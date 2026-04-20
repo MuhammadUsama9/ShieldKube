@@ -5,6 +5,8 @@ import {
     Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
     LineChart, Line
 } from 'recharts'
+import NetworkTopology from './components/NetworkTopology'
+import RuntimeThreats from './components/RuntimeThreats'
 
 const API_BASE = `${window.location.protocol}//${window.location.hostname}:8000`
 const COLORS = {
@@ -50,14 +52,22 @@ function App() {
     const [historyTimeline, setHistoryTimeline] = useState([])
     const [selectedHistoryIndex, setSelectedHistoryIndex] = useState(0)
     const [historicalData, setHistoricalData] = useState(null)
+    const [isPlaying, setIsPlaying] = useState(false)
+    const [mitreMatrix, setMitreMatrix] = useState({})
+    const [activeComplianceFramework, setActiveComplianceFramework] = useState(0)
+    const [aiAnalysis, setAiAnalysis] = useState(null)
+    const [sbomData, setSbomData] = useState(null)
+
+    const scrubberRef = useRef(null)
 
     const TAB_LABELS = {
         dashboard: 'Dashboard', pods: 'Pod Security', policies: 'Network Policies',
-        network: 'Network Map', rbac: 'RBAC Vision', vulnerabilities: 'Vulnerabilities',
-        compliance: 'Compliance', secrets: 'Secrets & Config', advisories: 'Advisories',
-        inventory: 'Inventory', monitoring: 'Monitoring', events: 'Events',
-        logs: 'Intelligence Log', agent: 'Agent Install'
+        topology: 'Architecture Map', rbac: 'RBAC Vision', vulnerabilities: 'Vulnerabilities',
+        compliance: 'Compliance', mitre: 'MITRE ATT&CK', secrets: 'Secrets & Config', advisories: 'Advisories',
+        inventory: 'Inventory', monitoring: 'Monitoring', events: 'Events', logs: 'Intel Log', 
+        agent: 'Agent Install', ebpf: 'Runtime Threats'
     }
+
     const [activeSubTab, setActiveSubTab] = useState('Workloads')
     const [activeVulnTab, setActiveVulnTab] = useState('pods') 
     const [search, setSearch] = useState('')
@@ -124,7 +134,8 @@ function App() {
                 fetchResource(`/api/logs?cluster_id=${activeCluster}`, setLogs, []),
                 fetchResource(`/api/topology?cluster_id=${activeCluster}`, setTopology, { nodes: [], links: [] }),
                 fetchResource(`/api/rbac/graph?cluster_id=${activeCluster}`, setRbacGraph, { nodes: [], links: [] }),
-                fetchResource(`/api/advisories?cluster_id=${activeCluster}`, setAdvisories, [])
+                fetchResource(`/api/advisories?cluster_id=${activeCluster}`, setAdvisories, []),
+                fetchResource(`/api/mitre/${activeCluster}`, setMitreMatrix, {})
             ]);
         } catch (err) {
             console.error("Critical fetch error:", err);
@@ -226,6 +237,32 @@ function App() {
                 });
         }
     }, [isHistoryMode, activeCluster])
+
+    const handleAIAnalyze = async (riskType, resourceName) => {
+        setLoading(true)
+        try {
+            const res = await fetch(`${API_BASE}/api/ai/analyze/${activeCluster}?risk_type=${riskType}&resource_name=${resourceName}`)
+            const data = await res.json()
+            setAiAnalysis(data)
+        } catch (err) {
+            setNotification({ type: 'error', msg: 'AI analysis failed.' })
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const handleFetchSBOM = async (resourceName) => {
+        setLoading(true)
+        try {
+            const res = await fetch(`${API_BASE}/api/sbom/${activeCluster}?resource_name=${resourceName}`)
+            const data = await res.json()
+            setSbomData(data)
+        } catch (err) {
+            setNotification({ type: 'error', msg: 'SBOM retrieval failed.' })
+        } finally {
+            setLoading(false)
+        }
+    }
 
     const fetchSnapshot = async (ts) => {
         setLoading(true);
@@ -679,6 +716,42 @@ function App() {
         </div>
     )
 
+    const renderMitreMatrix = () => {
+        const tactics = Object.keys(mitreMatrix || {});
+        if (tactics.length === 0) return <div className="glass-card" style={{padding:'4rem', textAlign:'center'}}>
+            <div style={{fontSize:'3rem', marginBottom:'1rem'}}>⚔️</div>
+            <h3>MITRE ATT&CK Matrix Initializing</h3>
+            <p style={{color:'var(--text-secondary)'}}>Analyzing cluster-wide tactics and techniques...</p>
+        </div>
+
+        return (
+            <div style={{display:'flex', flexDirection:'column', gap:'1.5rem'}}>
+                <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))', gap:'0.75rem', overflowX:'auto'}}>
+                    {tactics.map(tactic => (
+                        <div key={tactic} style={{display:'flex', flexDirection:'column', gap:'0.5rem', minWidth:'180px'}}>
+                            <div style={{
+                                padding:'0.75rem', background:'rgba(255,255,255,0.05)', borderRadius:'8px', border:'1px solid rgba(255,255,255,0.1)',
+                                textAlign:'center', fontWeight:800, fontSize:'0.72rem', textTransform:'uppercase', color:'var(--accent-cyan)'
+                            }}>
+                                {tactic}
+                            </div>
+                            {mitreMatrix[tactic].map((tech, idx) => (
+                                <div key={idx} className="glass-card" style={{
+                                    padding:'0.75rem', fontSize:'0.8rem', cursor:'pointer', borderLeft:`4px solid ${COLORS[tech.severity] || '#64748b'}`,
+                                    background: tech.id === 'Empty' ? 'rgba(255,255,255,0.01)' : 'rgba(255,255,255,0.03)'
+                                }} onClick={() => tech.id !== 'Empty' && handleAIAnalyze(tech.type || tech.finding, tech.resource)}>
+                                    <div style={{fontWeight:700, marginBottom:'4px'}}>{tech.id}</div>
+                                    <div style={{fontSize:'0.7rem', color:'var(--text-secondary)', wordBreak:'break-word'}}>{tech.finding || 'No active threats'}</div>
+                                    {tech.id !== 'Empty' && <div style={{marginTop:'6px', fontSize:'0.65rem', color:'var(--accent-purple)'}}>🔍 Click for AI Analysis</div>}
+                                </div>
+                            ))}
+                        </div>
+                    ))}
+                </div>
+            </div>
+        )
+    }
+
     const renderAdvisories = () => (
         <div style={{display:'flex', flexDirection:'column', gap:'20px'}}>
              <div className="section-header">
@@ -703,8 +776,9 @@ function App() {
                             {adv.remediation}
                         </div>
                     </div>
-                    <div style={{display:'flex', alignItems:'center'}}>
-                        <button className="glass-button primary" style={{padding:'10px 20px'}}>Apply Fix</button>
+                    <div style={{display:'flex', flexDirection:'column', gap:'10px', justifyContent:'center', minWidth:'140px'}}>
+                        <button className="glass-button primary" style={{padding:'10px 20px', width:'100%'}}>Apply Fix</button>
+                        <button className="glass-button secondary" onClick={() => handleAIAnalyze(adv.title, adv.target)} style={{fontSize:'0.75rem', padding:'6px 12px', color:'var(--accent-purple)', borderColor:'rgba(168,85,247,0.3)'}}>🤖 AI Explain</button>
                     </div>
                 </div>
             ))}
@@ -880,30 +954,33 @@ function App() {
         <div style={{display:'flex', flexDirection:'column', gap:'30px'}}>
             <div className="section-header">
                 <div style={{display:'flex', alignItems:'center', gap:'15px'}}>
-                    <div style={{fontSize:'2rem'}}>📋</div>
+                    <div style={{fontSize:'2rem'}}>📜</div>
                     <div>
-                        <div className="section-title">CIS Kubernetes Benchmarks</div>
-                        <div className="section-subtitle">Automated security auditing via ShieldKube-Go Engine</div>
+                        <div className="section-title">Regulatory Compliance & Hardening</div>
+                        <div className="section-subtitle">Multi-framework auditing: CIS, NSA, NIST 800-53</div>
                     </div>
                 </div>
-                <div className="glass-card" style={{padding:'10px 20px', display:'flex', alignItems:'center', gap:'15px', background:'rgba(59, 130, 246, 0.1)'}}>
-                    <div style={{fontSize:'0.8rem', color:'var(--text-secondary)'}}>Global Score</div>
-                    <div style={{fontSize:'1.5rem', fontWeight:'bold', color:'var(--accent-blue)'}}>
-                        {compliance.length > 0 ? Math.round(compliance.reduce((acc, curr) => acc + curr.score, 0) / compliance.length) : 'N/A'}%
-                    </div>
+                <div style={{display:'flex', gap:'10px'}}>
+                    {compliance.map((f, i) => (
+                        <button key={i} className={`glass-button ${activeComplianceFramework === i ? 'primary' : 'secondary'}`} 
+                            style={{fontSize:'0.75rem', padding:'0.5rem 1rem'}}
+                            onClick={() => setActiveComplianceFramework(i)}>
+                            {f.framework} ({f.score}%)
+                        </button>
+                    ))}
                 </div>
             </div>
 
-            {compliance.map((framework, idx) => (
-                <div key={idx} className="glass-card" style={{padding:'0', overflow:'hidden', border:'1px solid rgba(255,255,255,0.05)'}}>
+            {compliance[activeComplianceFramework] && (
+                <div className="glass-card" style={{padding:'0', overflow:'hidden', border:'1px solid rgba(255,255,255,0.05)'}}>
                     <div style={{padding:'20px 25px', background:'rgba(255,255,255,0.02)', borderBottom:'1px solid rgba(255,255,255,0.05)', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
                         <div>
-                            <div style={{fontSize:'1.1rem', fontWeight:'bold', marginBottom:'4px'}}>{framework.framework}</div>
-                            <div style={{fontSize:'0.85rem', color:'var(--text-secondary)'}}>{framework.description}</div>
+                            <div style={{fontSize:'1.1rem', fontWeight:'bold', marginBottom:'4px'}}>{compliance[activeComplianceFramework].framework}</div>
+                            <div style={{fontSize:'0.85rem', color:'var(--text-secondary)'}}>{compliance[activeComplianceFramework].description}</div>
                         </div>
                         <div style={{textAlign:'right'}}>
-                            <div style={{fontSize:'1.2rem', fontWeight:'bold'}}>{framework.score}%</div>
-                            <div style={{fontSize:'0.75rem', color:'var(--text-secondary)'}}>Compliance Level</div>
+                            <div style={{fontSize:'1.2rem', fontWeight:'bold'}}>{compliance[activeComplianceFramework].score}%</div>
+                            <div style={{fontSize:'0.75rem', color:'var(--text-secondary)'}}>Compliance Score</div>
                         </div>
                     </div>
                     <table className="ent-table">
@@ -912,11 +989,11 @@ function App() {
                                 <th style={{width:'80px'}}>ID</th>
                                 <th>Security Control</th>
                                 <th style={{width:'120px'}}>Status</th>
-                                <th>Recommendation / Finding</th>
+                                <th>Finding / Guidance</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {framework.controls.map((control, cidx) => (
+                            {compliance[activeComplianceFramework].controls.map((control, cidx) => (
                                 <tr key={cidx}>
                                     <td style={{fontSize:'0.8rem', fontWeight:'bold', color:'var(--accent-blue)'}}>{control.id}</td>
                                     <td style={{fontSize:'0.9rem'}}>{control.name}</td>
@@ -931,7 +1008,7 @@ function App() {
                         </tbody>
                     </table>
                 </div>
-            ))}
+            )}
 
             {compliance.length === 0 && !loading && (
                 <div className="glass-card" style={{padding:'50px', textAlign:'center'}}>
@@ -948,25 +1025,88 @@ function App() {
 
     const renderModals = () => (
         <>
-            {selectedFix && (
-                <div className="drawer-overlay" onClick={() => setSelectedFix(null)}>
-                    <div className="right-drawer" onClick={e => e.stopPropagation()}>
-                        <div className="drawer-header">
-                            <div>
-                                <h3>Remediation Blueprint</h3>
-                                <p>{selectedFix.target}</p>
+            {aiAnalysis && (
+                <div className="fix-modal-overlay" onClick={() => setAiAnalysis(null)}>
+                    <div className="fix-modal glass-card" style={{maxWidth:'600px', borderTop:'4px solid var(--accent-purple)'}} onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+                                <span style={{fontSize:'1.5rem'}}>🤖</span>
+                                <h3>AI Security Analyst Insight</h3>
                             </div>
-                            <button className="drawer-close" onClick={() => setSelectedFix(null)}>×</button>
+                            <button className="close-btn" onClick={() => setAiAnalysis(null)}>✕</button>
                         </div>
-                        <div className="drawer-body">
-                            <p style={{marginTop:0}}><strong>Intelligence:</strong> Apply this patch to resolve <b style={{color: 'var(--risk-crit)'}}>{selectedFix.type || selectedFix.id}</b>.</p>
-                            <div className="yaml-box">
-                                <pre>{selectedFix.patch || `Remediation Plan:\n1. Pull patched image\n2. Update ${selectedFix.target} spec\n3. Roll out update`}</pre>
+                        <div className="modal-body">
+                            <div style={{background:'rgba(139,92,246,0.1)', padding:'1rem', borderRadius:'8px', border:'1px solid rgba(139,92,246,0.2)', marginBottom:'1.5rem'}}>
+                                <div style={{fontWeight:800, color:'var(--accent-purple)', fontSize:'0.75rem', textTransform:'uppercase', marginBottom:'0.5rem'}}>Executive Summary</div>
+                                <div style={{fontSize:'1.1rem', fontWeight:600}}>{aiAnalysis.summary}</div>
+                            </div>
+                            
+                            <div style={{marginBottom:'1.5rem'}}>
+                                <div style={{fontWeight:700, fontSize:'0.85rem', color:'var(--text-secondary)', marginBottom:'0.5rem'}}>Deep Technical Analysis</div>
+                                <p style={{fontSize:'0.9rem', lineHeight:1.6, margin:0}}>{aiAnalysis.analysis}</p>
+                            </div>
+
+                            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem', marginBottom:'1.5rem'}}>
+                                <div style={{padding:'1rem', background:'rgba(255,255,255,0.03)', borderRadius:'8px'}}>
+                                    <div style={{fontSize:'0.7rem', color:'var(--text-secondary)', textTransform:'uppercase', fontWeight:700}}>Risk Impact</div>
+                                    <div style={{fontSize:'0.85rem', marginTop:'5px'}}>{aiAnalysis.impact}</div>
+                                </div>
+                                <div style={{padding:'1rem', background:'rgba(255,255,255,0.03)', borderRadius:'8px'}}>
+                                    <div style={{fontSize:'0.7rem', color:'var(--text-secondary)', textTransform:'uppercase', fontWeight:700}}>Confidence Score</div>
+                                    <div style={{fontSize:'1.1rem', fontWeight:800, marginTop:'5px', color:'var(--accent-cyan)'}}>{(aiAnalysis.confidence_score * 100).toFixed(0)}%</div>
+                                </div>
+                            </div>
+
+                            <div style={{padding:'1rem', background:'rgba(34,197,94,0.05)', borderRadius:'8px', border:'1px solid rgba(34,197,94,0.2)'}}>
+                                <div style={{fontWeight:700, fontSize:'0.85rem', color:'#22c55e', marginBottom:'0.5rem'}}>Remediation Strategy</div>
+                                <p style={{fontSize:'0.85rem', margin:0}}>{aiAnalysis.remediation}</p>
                             </div>
                         </div>
-                        <div className="drawer-footer">
-                            <button className="glass-button secondary" onClick={() => { navigator.clipboard.writeText(selectedFix.patch || `Remediation Plan:\n1. Pull patched image\n2. Update ${selectedFix.target} spec\n3. Roll out update`); setNotification({type:'success', msg:'Patch copied to clipboard!'}); }}>Copy Patch</button>
-                            <button className="glass-button primary" onClick={() => handleRemediate(selectedFix)}>Deploy Fix</button>
+                        <div className="modal-actions" style={{justifyContent:'flex-end', marginTop:'1rem'}}>
+                            <button className="glass-button primary" onClick={() => setAiAnalysis(null)}>Acknowledge Insight</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {sbomData && (
+                <div className="fix-modal-overlay" onClick={() => setSbomData(null)}>
+                    <div className="fix-modal glass-card" style={{maxWidth:'800px'}} onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+                                <span style={{fontSize:'1.5rem'}}>📦</span>
+                                <div>
+                                    <h3 style={{margin:0}}>SBOM Explorer</h3>
+                                    <div style={{fontSize:'0.75rem', color:'var(--text-secondary)'}}>CycloneDX Standard · {sbomData.metadata?.component?.name}</div>
+                                </div>
+                            </div>
+                            <button className="close-btn" onClick={() => setSbomData(null)}>✕</button>
+                        </div>
+                        <div className="modal-body" style={{padding:0}}>
+                            <table className="ent-table">
+                                <thead>
+                                    <tr>
+                                        <th>Component</th>
+                                        <th>Version</th>
+                                        <th>License</th>
+                                        <th>PURL</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {sbomData.components.map((comp, ci) => (
+                                        <tr key={ci}>
+                                            <td style={{fontWeight:700}}>{comp.name}</td>
+                                            <td><span className="cis-code">{comp.version}</span></td>
+                                            <td>{comp.licenses?.map(l => l).join(', ') || 'Proprietary'}</td>
+                                            <td style={{fontFamily:'monospace', fontSize:'0.7rem', color:'var(--text-secondary)'}}>{comp.purl}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="modal-actions" style={{marginTop:'1.5rem'}}>
+                            <button className="glass-button secondary" onClick={() => { navigator.clipboard.writeText(JSON.stringify(sbomData, null, 2)); setNotification({type:'success', msg:'SBOM JSON copied!'}) }}>Download JSON</button>
+                            <button className="glass-button primary" onClick={() => setSbomData(null)}>Close</button>
                         </div>
                     </div>
                 </div>
@@ -1050,14 +1190,14 @@ function App() {
                     </button>
 
                     <div style={{fontSize:'0.65rem', fontWeight:700, color:'var(--text-secondary)', padding:'1rem 0.5rem 0.5rem', textTransform:'uppercase', letterSpacing:'0.1em'}}>Security Posture</div>
-                    {[['pods','Pod Security','⬡'],['policies','Network Policies','⬡'],['rbac','RBAC Vision','⬡'],['vulnerabilities','Vulnerabilities','⬡'],['compliance','Compliance','⬡'],['secrets','Secrets & Config','⬡'],['advisories','Advisories','⬡']].map(([id, label]) => (
+                    {[['pods','Pod Security'],['policies','Network Policies'],['topology','Architecture Map'],['rbac','RBAC Vision'],['vulnerabilities','Vulnerabilities'],['compliance','Compliance'],['mitre','MITRE ATT&CK'],['secrets','Secrets & Config'],['advisories','Advisories']].map(([id, label]) => (
                         <button key={id} onClick={() => { setActiveTab(id); setFilterNamespace(null); setSearch(''); }} className={`nav-item ${activeTab === id ? 'active' : ''}`}>
                             <span className="nav-icon">⬡</span> {label}
                         </button>
                     ))}
 
                     <div style={{fontSize:'0.65rem', fontWeight:700, color:'var(--text-secondary)', padding:'1rem 0.5rem 0.5rem', textTransform:'uppercase', letterSpacing:'0.1em'}}>Operations</div>
-                    {[['inventory','Inventory'],['monitoring','Monitoring'],['events','Events'],['logs','Intel Log']].map(([id, label]) => (
+                    {[['ebpf', 'Runtime Threats'], ['inventory','Inventory'],['monitoring','Monitoring'],['events','Events'],['logs','Intel Log']].map(([id, label]) => (
                         <button key={id} onClick={() => { setActiveTab(id); setFilterNamespace(null); setSearch(''); }} className={`nav-item ${activeTab === id ? 'active' : ''}`}>
                             <span className="nav-icon">◉</span> {label}
                         </button>
@@ -1113,48 +1253,168 @@ function App() {
                 </header>
 
                 {/* Threat Time Machine Scrubber */}
-                <div style={{
-                    padding: '0.75rem 2.5rem', 
-                    background: isHistoryMode ? 'rgba(234,179,8,0.05)' : 'rgba(0,0,0,0.2)',
-                    borderBottom: '1px solid var(--border-subtle)',
-                    display: 'flex', alignItems: 'center', gap: '1.5rem',
-                    transition: 'all 0.3s'
-                }}>
-                    <button 
-                        onClick={() => setIsHistoryMode(!isHistoryMode)}
+                <div className={`time-machine-bar ${isHistoryMode ? 'retro' : 'live'}`}>
+                    <button
+                        onClick={() => {
+                            if (isHistoryMode) {
+                                setIsPlaying(false)
+                                clearInterval(playIntervalRef.current)
+                            }
+                            setIsHistoryMode(!isHistoryMode)
+                        }}
                         className={`glass-button ${isHistoryMode ? 'primary' : 'secondary'}`}
-                        style={{minWidth: '160px', background: isHistoryMode ? 'var(--risk-med)' : '', color: isHistoryMode ? '#000' : ''}}
+                        style={{ minWidth: '175px', background: isHistoryMode ? 'var(--risk-med)' : '', color: isHistoryMode ? '#000' : '' }}
                     >
                         {isHistoryMode ? '⏹ Exit Time Machine' : '🕒 Threat Time Machine'}
                     </button>
 
                     {isHistoryMode ? (
-                        <div style={{flex: 1, display: 'flex', alignItems: 'center', gap: '1.5rem'}}>
-                            <input 
-                                type="range" 
-                                min="0" 
-                                max={Math.max(0, historyTimeline.length - 1)} 
-                                step="1"
-                                value={selectedHistoryIndex}
-                                onChange={(e) => {
-                                    const idx = parseInt(e.target.value);
-                                    setSelectedHistoryIndex(idx);
-                                    fetchSnapshot(historyTimeline[idx]);
+                        <>
+                            {/* Play / Pause */}
+                            <button
+                                className="scrubber-play-btn"
+                                title={isPlaying ? 'Pause' : 'Play'}
+                                onClick={() => {
+                                    if (isPlaying) {
+                                        clearInterval(playIntervalRef.current)
+                                        setIsPlaying(false)
+                                    } else {
+                                        setIsPlaying(true)
+                                        playIntervalRef.current = setInterval(() => {
+                                            setSelectedHistoryIndex(prev => {
+                                                const next = prev + 1
+                                                if (next >= historyTimeline.length) {
+                                                    clearInterval(playIntervalRef.current)
+                                                    setIsPlaying(false)
+                                                    return prev
+                                                }
+                                                fetchSnapshot(historyTimeline[next])
+                                                return next
+                                            })
+                                        }, 1200)
+                                    }
                                 }}
-                                style={{flex: 1, accentColor: 'var(--risk-med)'}}
-                            />
-                            <div style={{minWidth: '220px', fontFamily: 'Fira Code', fontSize: '0.85rem', color: 'var(--risk-med)', fontWeight: 700}}>
-                                {historyTimeline[selectedHistoryIndex] ? new Date(historyTimeline[selectedHistoryIndex] * 1000).toLocaleString() : 'No History Found'}
+                            >
+                                {isPlaying ? '⏸' : '▶'}
+                            </button>
+
+                            {/* Custom Scrubber */}
+                            <div
+                                ref={scrubberRef}
+                                className="scrubber-wrapper"
+                                tabIndex={0}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'ArrowLeft' && selectedHistoryIndex > 0) {
+                                        const ni = selectedHistoryIndex - 1
+                                        setSelectedHistoryIndex(ni)
+                                        fetchSnapshot(historyTimeline[ni])
+                                    } else if (e.key === 'ArrowRight' && selectedHistoryIndex < historyTimeline.length - 1) {
+                                        const ni = selectedHistoryIndex + 1
+                                        setSelectedHistoryIndex(ni)
+                                        fetchSnapshot(historyTimeline[ni])
+                                    }
+                                }}
+                            >
+                                {/* Tooltip */}
+                                {hoveredIdx !== null && historyTimeline[hoveredIdx] && (
+                                    <div
+                                        className="scrubber-tooltip"
+                                        style={{
+                                            left: `${historyTimeline.length > 1 ? (hoveredIdx / (historyTimeline.length - 1)) * 100 : 0}%`
+                                        }}
+                                    >
+                                        {new Date(historyTimeline[hoveredIdx] * 1000).toLocaleTimeString()}
+                                    </div>
+                                )}
+
+                                {/* Track */}
+                                <div className="scrubber-track-outer">
+                                    <div className="scrubber-track-inner">
+                                        <div
+                                            className="scrubber-fill"
+                                            style={{ width: `${historyTimeline.length > 1 ? (selectedHistoryIndex / (historyTimeline.length - 1)) * 100 : 0}%` }}
+                                        />
+                                        <div
+                                            className="scrubber-thumb"
+                                            style={{ left: `${historyTimeline.length > 1 ? (selectedHistoryIndex / (historyTimeline.length - 1)) * 100 : 0}%` }}
+                                        />
+                                    </div>
+                                    {/* Native range (handles mouse events) */}
+                                    <input
+                                        type="range"
+                                        className="scrubber-input"
+                                        min="0"
+                                        max={Math.max(0, historyTimeline.length - 1)}
+                                        step="1"
+                                        value={selectedHistoryIndex}
+                                        onChange={(e) => {
+                                            const idx = parseInt(e.target.value)
+                                            setSelectedHistoryIndex(idx)
+                                            fetchSnapshot(historyTimeline[idx])
+                                        }}
+                                        onMouseMove={(e) => {
+                                            const rect = e.currentTarget.getBoundingClientRect()
+                                            const pct = (e.clientX - rect.left) / rect.width
+                                            const idx = Math.round(pct * (historyTimeline.length - 1))
+                                            setHoveredIdx(Math.min(Math.max(idx, 0), historyTimeline.length - 1))
+                                        }}
+                                        onMouseLeave={() => setHoveredIdx(null)}
+                                    />
+                                </div>
+
+                                {/* Tick marks */}
+                                <div className="scrubber-ticks">
+                                    {historyTimeline.map((_, i) => (
+                                        <div
+                                            key={i}
+                                            className={`scrubber-tick ${i % 5 === 0 ? 'major' : ''}`}
+                                        />
+                                    ))}
+                                </div>
+
+                                {/* Meta row */}
+                                <div className="scrubber-meta">
+                                    <span>← → to step</span>
+                                    <span>Snapshot {selectedHistoryIndex + 1} of {historyTimeline.length}</span>
+                                    <span>{historyTimeline[selectedHistoryIndex] ? new Date(historyTimeline[selectedHistoryIndex] * 1000).toLocaleString() : '—'}</span>
+                                </div>
                             </div>
-                            <div className="severity-tag medium" style={{animation: 'pulse 2s infinite'}}>RETROSPECTIVE MODE</div>
-                        </div>
+                        </>
                     ) : (
-                        <div style={{fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                            <span className="pulse-dot"></span> 
-                            Live Telemetry Stream Active · Point-in-time snapshots available every 60s
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span className="pulse-dot" />
+                            Live Telemetry Stream Active · Snapshots every 60s
                         </div>
                     )}
                 </div>
+
+                {/* Amber Retrospective Banner */}
+                {isHistoryMode && (
+                    <div className="retro-banner">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                            <span className="retro-badge">⏮ Retrospective Mode</span>
+                            <div className="retro-timestamp">
+                                {historyTimeline[selectedHistoryIndex]
+                                    ? new Date(historyTimeline[selectedHistoryIndex] * 1000).toLocaleString()
+                                    : 'Loading snapshot…'}
+                            </div>
+                        </div>
+                        <div className="retro-count">
+                            Snapshot {selectedHistoryIndex + 1} / {historyTimeline.length} · Historical forensics active
+                        </div>
+                        <button
+                            className="glass-button secondary"
+                            style={{ borderColor: 'rgba(245,158,11,0.4)', color: '#fbbf24', fontSize: '0.8rem' }}
+                            onClick={() => {
+                                setIsHistoryMode(false)
+                                setIsPlaying(false)
+                                clearInterval(playIntervalRef.current)
+                            }}
+                        >
+                            ↩ Return to Live
+                        </button>
+                    </div>
+                )}
 
                 {/* Dashboard / Content */}
                 <div className="content-wrapper">
@@ -1194,6 +1454,7 @@ function App() {
 
                             {/* ML Anomaly Banner */}
                             {mlAnomaly && (
+                                <div className={isHistoryMode ? 'snapshot-overlay' : ''} style={{marginBottom: '1.25rem'}}>
                                 <div className="glass-card" style={{
                                     marginBottom: '1.25rem', padding: '1.25rem 1.75rem',
                                     background: mlAnomaly.is_anomaly ? 'rgba(244,63,94,0.1)' : mlAnomaly.status === 'Learning' ? 'rgba(148,163,184,0.05)' : 'rgba(34,197,94,0.05)',
@@ -1233,6 +1494,7 @@ function App() {
                                         </div>
                                     </div>
                                 </div>
+                                </div>
                             )}
 
                             {/* Metrics Strip */}
@@ -1265,6 +1527,17 @@ function App() {
                                             <ReLegend wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }} />
                                             <Line type="monotone" dataKey="score" stroke="#0ea5e9" strokeWidth={3} dot={{ fill: '#0ea5e9', r: 4 }} activeDot={{ r: 6 }} name="Posture Score" />
                                             <Line type="monotone" dataKey="criticals" stroke="#ef4444" strokeWidth={2} dot={{ fill: '#ef4444', r: 3 }} name="Critical Risks" />
+                                            {mlAnomaly && mlAnomaly.forecast && (
+                                                <Line 
+                                                    type="monotone" 
+                                                    data={[{time: trends[trends.length-1]?.time, forecast: trends[trends.length-1]?.score}, {time: 'Future', forecast: mlAnomaly.forecast.security_score}]} 
+                                                    dataKey="forecast" 
+                                                    stroke="#0ea5e9" 
+                                                    strokeWidth={2} 
+                                                    strokeDasharray="5 5" 
+                                                    name="Predictive Score" 
+                                                />
+                                            )}
                                         </LineChart>
                                     </ResponsiveContainer>
                                 </div>
@@ -1330,16 +1603,40 @@ function App() {
                                     </ResponsiveContainer>
                                 </div>
                             </div>
+
+                            {/* v2.1 Advanced Global Insights Feed */}
+                            <div style={{display:'grid', gridTemplateColumns:'1.5fr 1fr', gap:'1.25rem', marginTop:'1.25rem'}}>
+                                <div className="glass-card" style={{height:'400px', display:'flex', flexDirection:'column', overflow:'hidden', padding:0}}>
+                                    <div style={{padding:'1rem 1.5rem', borderBottom:'1px solid var(--border-subtle)', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                                        <h3 style={{margin:0, fontSize:'1rem'}}>Architecture Pulse View</h3>
+                                        <button className="glass-button secondary" onClick={() => setActiveTab('topology')} style={{fontSize:'0.7rem', padding:'0.2rem 0.6rem'}}>Open Full Map ↗</button>
+                                    </div>
+                                    <div style={{flex:1, position:'relative'}}>
+                                        <NetworkTopology activeCluster={activeCluster} />
+                                    </div>
+                                </div>
+                                <div className="glass-card" style={{height:'400px', display:'flex', flexDirection:'column', padding:0}}>
+                                    <div style={{padding:'1rem 1.5rem', borderBottom:'1px solid var(--border-subtle)', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                                        <h3 style={{margin:0, fontSize:'1rem'}}>Live Runtime Threat Feed</h3>
+                                        <button className="glass-button secondary" onClick={() => setActiveTab('ebpf')} style={{fontSize:'0.7rem', padding:'0.2rem 0.6rem'}}>View Process Tree ↗</button>
+                                    </div>
+                                    <div style={{flex:1, overflowY:'auto', padding:'1rem'}}>
+                                        <RuntimeThreats activeCluster={activeCluster} />
+                                    </div>
+                                </div>
+                            </div>
                         </>
                     )}
 
                     {/* Content Views */}
                     {activeTab !== 'dashboard' && (
-                        <div className="main-content-grid" style={{ gridTemplateColumns: (['compliance', 'monitoring', 'network', 'rbac', 'advisories', 'logs', 'agent'].includes(activeTab)) ? '1fr' : '1fr 350px' }}>
+                        <div className="main-content-grid" style={{ gridTemplateColumns: (['compliance', 'monitoring', 'topology', 'ebpf', 'rbac', 'advisories', 'logs', 'agent'].includes(activeTab)) ? '1fr' : '1fr 350px' }}>
                             <div className="glass-card visual-section" style={{ minHeight: '600px'}}>
 
-                                {activeTab === 'network' && renderNetworkMap()}
+                                {activeTab === 'topology' && <NetworkTopology activeCluster={activeCluster} />}
+                                {activeTab === 'ebpf' && <RuntimeThreats activeCluster={activeCluster} />}
                                 {activeTab === 'rbac' && renderRBACGraph()}
+                                {activeTab === 'mitre' && renderMitreMatrix()}
                                 {activeTab === 'advisories' && renderAdvisories()}
                                 {activeTab === 'compliance' && renderCompliance()}
                                 {activeTab === 'monitoring' && renderMonitoring()}
@@ -1394,9 +1691,14 @@ function App() {
                                                             <SeverityBadge level={v.severity} />
                                                         </td>
                                                         <td>
-                                                            <button className="glass-button secondary" style={{fontSize: '0.75rem', padding: '0.3rem 0.8rem'}} onClick={() => setSelectedFix(v)}>
-                                                               Remediate
-                                                            </button>
+                                                            <div style={{display:'flex', gap:'8px'}}>
+                                                                <button className="glass-button secondary" style={{fontSize: '0.75rem', padding: '0.3rem 0.8rem'}} onClick={() => setSelectedFix(v)}>
+                                                                    Remediate
+                                                                </button>
+                                                                <button className="glass-button secondary" style={{fontSize: '0.75rem', padding: '0.3rem 0.8rem', color:'var(--accent-cyan)'}} onClick={() => handleFetchSBOM(v.target)}>
+                                                                    SBOM
+                                                                </button>
+                                                            </div>
                                                         </td>
                                                     </tr>
                                                 ))}

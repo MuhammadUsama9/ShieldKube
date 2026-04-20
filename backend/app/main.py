@@ -121,13 +121,15 @@ async def sync_agent_data(cluster_id: str, request: Request):
         if dt in payload:
             db.save_telemetry(cluster_id, dt, payload[dt])
             
-    # 4. Save Snapshot for Time Machine (If not already saved recently)
-    # We'll save a full bundle of what was just synced
+    # 4. Save Snapshot for Time Machine
     snapshot_data = {
         "summary": payload.get("summary", {}),
         "events": payload.get("events", []),
         "ml_anomaly": payload.get("ml_anomaly", {}),
-        "pods": payload.get("pods", [])
+        "pods": payload.get("pods", []),
+        "rbac": payload.get("rbac", [])[:5] if payload.get("rbac") else [],
+        "compliance_score": payload.get("compliance", {}).get("overall_score", 0) if isinstance(payload.get("compliance"), dict) else 0,
+        "vulnerability_count": sum(len(v) if isinstance(v, list) else 0 for v in (payload.get("vulnerabilities", {}) or {}).values())
     }
     db.save_snapshot(cluster_id, snapshot_data)
             
@@ -316,6 +318,27 @@ def get_vulnerabilities(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_vulnerabilities()
     return db.get_telemetry(cluster_id, "vulnerabilities", {})
 
+@app.get("/api/ebpf/{cluster_id}")
+def get_ebpf_events(cluster_id: str = "local"):
+    if cluster_id == "local": return scanner.scan_ebpf_events()
+    return db.get_telemetry(cluster_id, "ebpf", [])
+
+@app.get("/api/mitre/{cluster_id}")
+def get_mitre_matrix(cluster_id: str = "local"):
+    if cluster_id == "local": return scanner.map_to_mitre_attack()
+    return db.get_telemetry(cluster_id, "mitre", {})
+
+@app.get("/api/ai/analyze/{cluster_id}")
+def get_ai_analysis(cluster_id: str = "local", risk_type: str = Query(...), resource_name: str = Query(...)):
+    if cluster_id == "local": return scanner.generate_ai_insight(risk_type, resource_name)
+    # Placeholder for remote agent AI (usually performed on backend for cost/API control)
+    return scanner.generate_ai_insight(risk_type, resource_name)
+
+@app.get("/api/sbom/{cluster_id}")
+def get_sbom_data(cluster_id: str = "local", resource_name: str = Query(...)):
+    if cluster_id == "local": return scanner.get_sbom(resource_name)
+    return db.get_telemetry(cluster_id, f"sbom_{resource_name}", {})
+
 @app.get("/api/radar")
 def get_radar(cluster_id: str = "local"):
     if cluster_id == "local": return scanner.scan_radar_data()
@@ -374,9 +397,9 @@ async def remediate(data: dict):
         )
     return {"status": "error", "msg": "Remediation on remote agent clusters not yet supported"}
 
-@app.get("/api/topology")
+@app.get("/api/topology/{cluster_id}")
 def get_topology(cluster_id: str = "local"):
-    """Generates a graph structure for network topology."""
+    """Generates an advanced multi-layered graph structure for network topology."""
     if cluster_id == "local":
         pods = scanner.scan_pods()
         policies = scanner.scan_network_policies()
@@ -384,14 +407,32 @@ def get_topology(cluster_id: str = "local"):
         pods = db.get_telemetry(cluster_id, "pods", [])
         policies = db.get_telemetry(cluster_id, "network_policies", [])
     
-    nodes = [{"id": p["name"], "type": "pod", "namespace": p["namespace"], "isolated": False} for p in pods]
+    nodes = []
     links = []
     
-    # Simple namespace-based grouping for links
+    # 1. Create Pod Nodes
+    for p in pods:
+        nodes.append({
+            "id": p["name"],
+            "type": "pod",
+            "namespace": p["namespace"],
+            "severity": p["severity"],
+            "isolated": any(pol["namespace"] == p["namespace"] for pol in policies)
+        })
+        
+    # 2. Advanced Link Logic: NetworkPolicy Boundaries & Service Discovery
+    # For now, we simulate connectivity based on namespace and common policy exposure
     for i, p1 in enumerate(nodes):
         for j, p2 in enumerate(nodes):
             if i < j and p1["namespace"] == p2["namespace"]:
-                links.append({"source": p1["id"], "target": p2["id"]})
+                # Check if there's a policy risk between them
+                has_risk = any(pol["namespace"] == p1["namespace"] and pol.get("risks") for pol in policies)
+                links.append({
+                    "source": p1["id"],
+                    "target": p2["id"],
+                    "value": 1,
+                    "type": "risky" if has_risk else "secure"
+                })
                 
     return {"nodes": nodes, "links": links}
 
@@ -591,6 +632,43 @@ def get_snapshot(cluster_id: str = "local", timestamp: float = Query(...)):
         raise HTTPException(status_code=404, detail="Snapshot not found")
     return snapshot
 
+@app.get("/api/history/diff")
+def get_history_diff(cluster_id: str = "local", ts1: float = Query(...), ts2: float = Query(...)):
+    """Returns the delta between two snapshot timestamps for quick change detection."""
+    snap1 = db.get_snapshot(cluster_id, ts1)
+    snap2 = db.get_snapshot(cluster_id, ts2)
+    if not snap1 or not snap2:
+        raise HTTPException(status_code=404, detail="One or both snapshots not found. Check timeline for valid timestamps.")
+
+    def safe_int(d, *keys, default=0):
+        try:
+            val = d
+            for k in keys:
+                val = val[k]
+            return int(val) if val is not None else default
+        except (KeyError, TypeError):
+            return default
+
+    score1 = safe_int(snap1, "summary", "security_score")
+    score2 = safe_int(snap2, "summary", "security_score")
+    pods1  = len(snap1.get("pods", []))
+    pods2  = len(snap2.get("pods", []))
+    risks1 = sum(len(p.get("risks", [])) for p in snap1.get("pods", []))
+    risks2 = sum(len(p.get("risks", [])) for p in snap2.get("pods", []))
+
+    return {
+        "cluster_id": cluster_id,
+        "ts1": ts1, "ts2": ts2,
+        "security_score_t1": score1, "security_score_t2": score2,
+        "security_score_delta": score2 - score1,
+        "pod_count_t1": pods1, "pod_count_t2": pods2,
+        "pod_count_delta": pods2 - pods1,
+        "risk_count_t1": risks1, "risk_count_t2": risks2,
+        "risk_count_delta": risks2 - risks1,
+        "vulnerability_count_delta": safe_int(snap2, "vulnerability_count") - safe_int(snap1, "vulnerability_count"),
+        "compliance_score_delta": safe_int(snap2, "compliance_score") - safe_int(snap1, "compliance_score"),
+    }
+
 # Periodic snapshotting for local cluster
 from threading import Timer
 
@@ -598,14 +676,29 @@ def capture_local_snapshot():
     try:
         print(f"[{time.strftime('%H:%M:%S')}] TimeMachine: Capturing local snapshot...")
         summary = get_summary("local")
-        # We only snapshot critical metrics for history to save space
+        pods = scanner.scan_pods()[:10]
+        rbac_data = db.get_telemetry("local", "rbac", [])
+        compliance = db.get_telemetry("local", "compliance", {})
+        compliance_score = compliance.get("overall_score", 0) if isinstance(compliance, dict) else 0
+        vulnerabilities_data = db.get_telemetry("local", "vulnerabilities", {})
+        vuln_count = sum(
+            len(v) if isinstance(v, list) else 0
+            for v in (vulnerabilities_data.values() if isinstance(vulnerabilities_data, dict) else [])
+        )
+
         snapshot = {
             "summary": summary,
             "events": scanner.scan_events()[:20],
             "ml_anomaly": get_ml_anomaly("local"),
-            "pods": scanner.scan_pods()[:10]
+            "pods": pods,
+            "rbac": rbac_data[:5] if isinstance(rbac_data, list) else [],
+            "compliance_score": compliance_score,
+            "vulnerability_count": vuln_count,
         }
         db.save_snapshot("local", snapshot)
+        snap_count = db.get_snapshot_count("local")
+        fields = ", ".join(snapshot.keys())
+        print(f"[{time.strftime('%H:%M:%S')}] TimeMachine: Saved snapshot #{snap_count} → fields=[{fields}]")
     except Exception as e:
         print(f"TimeMachine Error: {e}")
     finally:
