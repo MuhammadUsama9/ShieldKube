@@ -12,14 +12,16 @@
 
 ## Key Features
 
+-   **MITRE ATT&CK Matrix**: Advanced tactical threat mapping across Initial Access, Execution, Persistence, and more.
+-   **AI Security Analyst**: Explainable-AI triaging providing human-readable narratives and remediation advice for detected risks.
+-   **NIST 800-53 Compliance**: Comprehensive regulatory auditing against NIST SP 800-53 Rev. 5 controls.
+-   **SBOM Dependency Explorer**: Generate and explore CycloneDX-compliant Software Bills of Materials for your container images.
 -   **Real-time Risk Radar**: Visualize security threats across different dimensions (Runtime, IAM, Network, etc.).
 -   **CVE Workload Audit**: Automated scanning of Pods, Deployments, and Nodes against the latest vulnerability databases.
 -   **Live Cluster Monitoring**: Track CPU and Memory utilization for both Pods and Nodes dynamically in real-time.
--   **Cluster Events Stream**: Instant visibility into Kubernetes scheduling actions, warnings, and container lifecycle events.
 -   **Secret & ConfigMap Auditor**: Automatically scan for hardcoded credentials, API keys, and weak naming conventions in your cluster configs.
--   **RBAC permission auditing**: Identify wildcard permissions and over-privileged roles.
--   **Interactive remediation**: Apply security patches directly from the dashboard.
--   **Continuous ML Security Engine**: Adaptive unsupervised anomaly detection modeling baseline telemetry distributions via an online Stochastic Gradient Descent One-Class SVM.
+-   **RBAC Permission Vision**: Visualize Subject-to-Role relationships and identify wildcard or over-privileged permissions.
+-   **Continuous ML Security Engine**: Adaptive anomaly detection modeling baseline telemetry via an online Stochastic Gradient Descent One-Class SVM.
 
 ## Tech Stack
 
